@@ -24,15 +24,10 @@ Agent 理解用户意图
 积累交互轨迹
 		↓
 后期 SFT / GRPO 优化 Agent
-```
-
-## 2. demo
-
-```
-输入：用户一句话需求
-输出：5 首推荐歌曲 + 推荐理由
-反馈：喜欢 / 不喜欢 / 跳过 / 收藏
-更新：用户画像权重变化
+		↓
+	验证
+		↓
+	前端
 ```
 
 ## 1. L1 用户画像模块
@@ -66,7 +61,7 @@ Agent 理解用户意图
   "long_term_preference": {},
   "short_term_intent": {},
   "negative_preference": {},
-  "feedback_memory": {}
+  "feedback_memory": []
 }
 ```
 
@@ -132,6 +127,50 @@ feedback_memory如下，实时更新用户画像, 计算个性化 reward, 评估
 时间戳
 对应歌曲标签
 reward 分数
+```
+
+### L1 当前实现
+
+L1 当前只负责用户画像的数据边界，不负责理解自然语言或计算反馈奖励。后续模块将整理好的字典迁入 L1，由 L1 完成校验、合并和持久化。
+
+职责包括：
+
+- 提供包含全部 L1 字段的空画像框架。
+- 校验后续模块传入的部分画像字典。
+- 合并长期偏好和负向偏好的标签权重。
+- 覆盖本轮传入的短期意图字段。
+- 追加 L7 生成的反馈记录。
+- 按用户读取和保存 JSON。
+
+不属于 L1 的职责：
+
+- 自然语言意图抽取由 L6 或独立解析工具负责。
+- 歌曲标签和元数据由 L2 提供。
+- reward 计算以及如何更新偏好权重由 L7 决定。
+
+本地查看完整框架：
+
+```bash
+conda activate rateyourDJ
+python -m pip install -e .
+rateyourdj-l1 schema
+rateyourdj-l1 init demo-user
+rateyourdj-l1 show demo-user
+```
+
+`init` 会直接生成完整的空画像，不需要传入 example。默认保存在 `data/user_profiles/<user_id>.json`。
+
+后续模块需要迁入字典时：
+
+```bash
+rateyourdj-l1 validate path/to/profile_patch.json
+rateyourdj-l1 import demo-user path/to/profile_patch.json
+```
+
+运行测试：
+
+```bash
+python -m unittest discover -s tests -v
 ```
 
 ## L2 音乐知识库模块
@@ -318,15 +357,15 @@ Final Score =
 - 0.20 * ConstraintPenalty
 ```
 
-| 排序因子          | 来源                                      | 使用字段                                                     | 作用                           | 权重建议 |
-| ----------------- | ----------------------------------------- | ------------------------------------------------------------ | ------------------------------ | -------- |
-| ShortTermMatch    | L1 Short-term Intent + L2 Song Profile    | language、mood、scene、instrument、sound_texture、tempo、energy、must_have、avoid | 判断是否符合本次需求           | 0.35     |
-| LongTermMatch     | L1 Long-term Preference + L2 Song Profile | genres、artists、moods、scenes、instruments、vocal_styles、sound_textures | 判断是否符合长期偏好           | 0.25     |
-| RetrievalScore    | L3 Candidate Retrieval                    | retrieval_score、retrieval_sources                           | 保留召回阶段相关性             | 0.15     |
-| QualityScore      | L2 Metadata / Source Tags                 | popularity、metadata completeness、tag confidence            | 避免推荐低质量或信息不可靠歌曲 | 0.10     |
-| DiversityScore    | L4 当前推荐列表                           | artist、genre、embedding similarity                          | 避免推荐结果过于重复           | 0.10     |
-| NegativePenalty   | L1 Negative Preference + L2 avoid_tags    | negative_preference、avoid_tags                              | 惩罚用户长期不喜欢的特征       | -0.25    |
-| ConstraintPenalty | L1 Short-term Intent + L2 Song Profile    | must_have、avoid、language、energy、tempo                    | 惩罚或过滤违反当前限制的歌曲   | -0.20    |
+| 排序因子          | 来源                                      | 使用字段                                                     | 作用                           | 权重建议（暂时） |
+| ----------------- | ----------------------------------------- | ------------------------------------------------------------ | ------------------------------ | ---------------- |
+| ShortTermMatch    | L1 Short-term Intent + L2 Song Profile    | language、mood、scene、instrument、sound_texture、tempo、energy、must_have、avoid | 判断是否符合本次需求           | 0.35             |
+| LongTermMatch     | L1 Long-term Preference + L2 Song Profile | genres、artists、moods、scenes、instruments、vocal_styles、sound_textures | 判断是否符合长期偏好           | 0.25             |
+| RetrievalScore    | L3 Candidate Retrieval                    | retrieval_score、retrieval_sources                           | 保留召回阶段相关性             | 0.15             |
+| QualityScore      | L2 Metadata / Source Tags                 | popularity、metadata completeness、tag confidence            | 避免推荐低质量或信息不可靠歌曲 | 0.10             |
+| DiversityScore    | L4 当前推荐列表                           | artist、genre、embedding similarity                          | 避免推荐结果过于重复           | 0.10             |
+| NegativePenalty   | L1 Negative Preference + L2 avoid_tags    | negative_preference、avoid_tags                              | 惩罚用户长期不喜欢的特征       | -0.25            |
+| ConstraintPenalty | L1 Short-term Intent + L2 Song Profile    | must_have、avoid、language、energy、tempo                    | 惩罚或过滤违反当前限制的歌曲   | -0.20            |
 
 
 
@@ -336,14 +375,14 @@ Final Score =
 
 | 工具名称             | 对应模块     | 输入                                             | 输出                                      | 作用               |
 | -------------------- | ------------ | ------------------------------------------------ | ----------------------------------------- | ------------------ |
-| parse_user_intent    | L1           | user_query                                       | short_term_intent                         | 解析用户当前需求   |
+| parse_user_intent    | L6 / 解析工具 | user_query                                       | short_term_intent                         | 解析用户当前需求   |
 | get_user_profile     | L1           | user_id                                          | long_term_preference、negative_preference | 获取用户长期画像   |
 | search_song_metadata | L2           | title / artist / query                           | song profile                              | 查询歌曲信息       |
 | retrieve_candidates  | L3           | short_term_intent、user_profile                  | candidate_songs                           | 召回候选歌曲       |
 | rank_candidates      | L4           | candidate_songs、user_profile、short_term_intent | ranked_songs                              | 对候选歌曲排序     |
 | play_song            | 外部音乐 API | song_id                                          | playback_url / playback_status            | 播放或返回播放链接 |
 | collect_feedback     | L7           | user_id、song_id、feedback_type                  | feedback_record                           | 记录用户反馈       |
-| update_user_profile  | L1 / L7      | feedback_record、song_profile                    | updated_user_profile                      | 根据反馈更新画像   |
+| import_profile_dictionary | L1      | L6 / L7 生成的画像字典                           | updated_user_profile                      | 校验、合并并保存画像 |
 
 
 
@@ -577,10 +616,6 @@ w1 * like
 ## L9 评估与部署
 
 Evaluation Metrics：
-Precision@K
-Recall@K
-NDCG@K
-Hit Rate
 Skip Rate
 Favorite Rate
 Play Completion Rate
@@ -592,7 +627,7 @@ Agent Metrics：
 推荐解释合理性
 自验证通过率
 
-A/B Test：
+对比：
 普通推荐系统 vs Agent 推荐
 无反馈更新 vs 有反馈更新
 无 SFT/GRPO vs 有 SFT/GRPO
@@ -600,10 +635,6 @@ A/B Test：
 ## L10 前端（如果有）
 
 我问一个然后ai给我一段推荐的理由，和歌曲的试听，试听可选择加入到我的歌单，跳过等选择，账号独享奖励函数
-
-
-
-
 
 
 
