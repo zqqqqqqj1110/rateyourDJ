@@ -6,4 +6,4 @@ __pycache__/
 build/
 dist/
 data/user_profiles/
-
+data/song_profiles/

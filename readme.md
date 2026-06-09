@@ -283,6 +283,38 @@ python -m unittest discover -s tests -v
 }
 ```
 
+### L2 当前实现
+
+L2 当前只负责歌曲画像的数据边界，不负责调用外部 API、推断标签或生成 embedding。
+
+职责包括：
+
+- 提供包含全部 L2 字段的空歌曲画像框架。
+- 校验采集器、标准化模块或 enrichment 模块传入的部分字典。
+- 合并 metadata、对齐特征、标签、来源和 embedding 数据。
+- 按 `song_id` 读取和保存 JSON。
+
+查看完整 schema 和创建空歌曲画像：
+
+```bash
+conda activate rateyourDJ
+python -m pip install -e .
+rateyourdj-l2 schema
+rateyourdj-l2 init song-001
+rateyourdj-l2 show song-001
+```
+
+`init` 生成的文件位于 `data/song_profiles/song-001.json`，不需要传入 example。
+
+后续数据采集模块迁入字典时：
+
+```bash
+rateyourdj-l2 validate path/to/song_patch.json
+rateyourdj-l2 import song-001 path/to/song_patch.json
+```
+
+当前所有权重、`popularity` 和 `confidence_score` 均统一归一化到 `0` 至 `1`。
+
 
 
 ## L3 候选歌曲召回模块
@@ -635,6 +667,5 @@ Agent Metrics：
 ## L10 前端（如果有）
 
 我问一个然后ai给我一段推荐的理由，和歌曲的试听，试听可选择加入到我的歌单，跳过等选择，账号独享奖励函数
-
 
 
