@@ -66,7 +66,7 @@ class RecommendationRankingService:
         retrieval = self.retrieval_service.retrieve(
             user_id,
             top_k=candidate_pool_size,
-            max_per_artist=candidate_pool_size,
+            max_per_artist=max_per_artist,
             min_score=min_retrieval_score,
         )
         missing_candidates: list[str] = []

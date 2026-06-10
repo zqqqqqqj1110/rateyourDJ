@@ -244,6 +244,31 @@ class RetrievalServiceTests(unittest.TestCase):
             result.candidates[0].candidate_song_id, {"blur-1", "blur-2"}
         )
 
+    def test_min_score_includes_a_candidate_equal_to_the_threshold(self) -> None:
+        candidate = make_song(
+            "threshold",
+            title="Threshold",
+            artist="Other Artist",
+            year=2025,
+            track_tags={},
+        )
+        self.song_store.save(candidate)
+        expected_score = self.service.retrieve(
+            "user-1",
+            top_k=10,
+        ).candidates[-1].similarity_score
+
+        result = self.service.retrieve(
+            "user-1",
+            top_k=10,
+            min_score=expected_score,
+        )
+
+        self.assertIn(
+            "threshold",
+            [item.candidate_song_id for item in result.candidates],
+        )
+
 
 class L3CliTests(unittest.TestCase):
     def test_schema_command_prints_score_breakdown(self) -> None:

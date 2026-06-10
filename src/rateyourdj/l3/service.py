@@ -165,7 +165,7 @@ class CandidateRetrievalService:
             }
             collection_score = round(sum(collection_breakdown.values()), 6)
 
-            if collection_score <= min_score:
+            if collection_score < min_score or collection_score == 0:
                 continue
             scored.append(
                 (

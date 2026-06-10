@@ -91,7 +91,7 @@ python -c "import json; print(len(json.load(open('data/user_profiles/demo-user.j
 运行 L1 单元测试：
 
 ```bash
-python -m unittest tests.test_l1 -v
+PYTHONPATH=src python -m unittest tests.test_l1 -v
 ```
 
 验证一个准备迁入 L1 的部分字典：
@@ -171,7 +171,7 @@ data/song_profiles/<song_id>.json
 - 计算 `confidence_score`。它表示数据质量，不是歌曲相似度。
 - 自动写入 `data/song_profiles/<song_id>.json`。
 - 外部 API 请求最多重试三次；单个来源失败不会终止整张专辑。
-- 批量采集完成后自动更新 L1。
+- 批量采集默认只扩充 L2 候选库；显式传入 `--user-id` 时才更新 L1。
 
 目前登记了 18 张专辑、284 首歌曲：
 
@@ -201,19 +201,25 @@ python -m pip install -e . --no-build-isolation
 只采集第一批：
 
 ```bash
-rateyourdj-collect album batch-1 --user-id demo-user
+rateyourdj-collect album batch-1
 ```
 
 只采集第二批：
 
 ```bash
-rateyourdj-collect album batch-2 --user-id demo-user
+rateyourdj-collect album batch-2
 ```
 
 采集全部登记专辑：
 
 ```bash
-rateyourdj-collect album all --user-id demo-user
+rateyourdj-collect album all
+```
+
+上述命令只构建候选库。若采集内容确实是用户收藏，再显式指定：
+
+```bash
+rateyourdj-collect album pink-floyd-the-wall --user-id demo-user
 ```
 
 成功完成全部采集时，汇总应包含：
@@ -259,6 +265,12 @@ find data/song_profiles -maxdepth 1 -name "*.json" | wc -l
 空 schema 的 `demo-song.json`。L2 文件总数是候选库规模，不等于当前用户
 的收藏数量；收藏规模应以 L1 的 `collection_song_ids` 为准。
 
+手工修改收藏 ID 后必须同步重建偏好：
+
+```bash
+rateyourdj-collect rebuild-profile demo-user
+```
+
 检查某个真实 L2 文件：
 
 ```bash
@@ -286,19 +298,19 @@ rateyourdj-l2 show <上一步文件名中的song_id>
 运行 L2 单元测试：
 
 ```bash
-python -m unittest tests.test_l2 -v
+PYTHONPATH=src python -m unittest tests.test_l2 -v
 ```
 
 运行采集器离线测试：
 
 ```bash
-python -m unittest tests.test_collectors -v
+PYTHONPATH=src python -m unittest tests.test_collectors -v
 ```
 
 运行全部测试：
 
 ```bash
-python -m unittest discover -s tests -v
+PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
 联网 smoke test 默认跳过。需要单独验证真实 API 时：
@@ -463,11 +475,13 @@ similarity_score = 0.70 * 0.90 + 0.30 * 0.50 = 0.78
 data/song_profiles/<song_id>.json
 ```
 
-只修改 JSON 文件时要保持完整 L1 结构和合法 JSON。更稳妥的方式是创建
-一个 patch 文件，然后通过 L1 import 写入。
+只修改 JSON 文件时要保持完整 L1 结构和合法 JSON。当前 L1 import 会合并
+收藏 ID，不会删除旧收藏。需要把大量收藏临时替换成少量测试种子时，应直接
+编辑测试用户文件或新建专用测试用户，然后重建偏好：
 
-注意：当前 L1 import 会合并收藏 ID，不会删除旧收藏。需要把大量收藏临时
-替换成少量测试种子时，应直接编辑测试用户文件，或新建一个专用测试用户。
+```bash
+rateyourdj-collect rebuild-profile demo-user
+```
 
 ## 运行 L3
 

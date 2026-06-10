@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from rateyourdj.l1 import JsonProfileStore, UserProfileService
+from rateyourdj.l1 import JsonProfileStore, UserProfile, UserProfileService
 from rateyourdj.l2 import JsonSongStore, SongProfile, SongProfileService
 from rateyourdj.l2.matching import records_match
+from rateyourdj.l2.normalizers import normalize_tag_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,26 +207,52 @@ def _update_user_profile(
         if profile.song_id not in song_ids:
             song_ids.append(profile.song_id)
 
+    rebuild_user_profile(
+        user_id,
+        song_ids=song_ids,
+        song_data_dir=song_data_dir,
+        user_data_dir=user_data_dir,
+    )
+
+
+def rebuild_user_profile(
+    user_id: str,
+    *,
+    song_ids: list[str] | None = None,
+    song_data_dir: str | Path = "data/song_profiles",
+    user_data_dir: str | Path = "data/user_profiles",
+) -> UserProfile:
+    """Rebuild L1 preferences from the user's current collection songs."""
+    service = UserProfileService(JsonProfileStore(user_data_dir))
+    existing = service.get_user_profile(user_id)
+    collection_song_ids = (
+        list(existing.collection_song_ids) if song_ids is None else list(song_ids)
+    )
     song_store = JsonSongStore(song_data_dir)
     profiles = [
         song_store.load(song_id)
-        for song_id in song_ids
+        for song_id in collection_song_ids
         if song_store.exists(song_id)
     ]
     artist_counts: dict[str, float] = defaultdict(float)
+    artist_labels: dict[str, str] = {}
     genre_totals: dict[str, float] = defaultdict(float)
     tag_totals: dict[str, float] = defaultdict(float)
     for profile in profiles:
         artist = profile.metadata.get("artist")
         if artist:
-            artist_counts[str(artist)] += 1
+            artist_key = " ".join(str(artist).strip().casefold().split())
+            artist_label = artist_labels.setdefault(artist_key, str(artist).strip())
+            artist_counts[artist_label] += 1
         for genre, score in profile.genres.items():
             genre_totals[genre] += score
         for score_map in profile.source_tags.values():
             for tag, score in score_map.items():
-                tag_totals[tag] += score
+                normalized_tag = normalize_tag_name(tag)
+                if _is_preference_tag(normalized_tag, artist):
+                    tag_totals[normalized_tag] += score
 
-    service.replace_profile_data(
+    return service.replace_profile_data(
         user_id,
         {
             "collection_song_ids": [profile.song_id for profile in profiles],
@@ -235,6 +262,33 @@ def _update_user_profile(
             "feedback_memory": existing.feedback_memory,
         },
     )
+
+
+_NON_PREFERENCE_TAGS = {
+    "albums i own",
+    "awesome",
+    "beautiful",
+    "best",
+    "favorites",
+    "favourite",
+    "great",
+    "love",
+    "seen live",
+    "wrong track streaming",
+}
+_DECADE_OR_YEAR_RE = re.compile(r"^(?:(?:19|20)\d{2}|(?:19|20)?\d0s)$")
+_RATING_RE = re.compile(r"^\d+(?:\.\d+)?\s+(?:of|out of)\s+\d+\s+stars?$")
+
+
+def _is_preference_tag(tag: str, artist: str | None) -> bool:
+    if (
+        not tag
+        or tag in _NON_PREFERENCE_TAGS
+        or _DECADE_OR_YEAR_RE.fullmatch(tag)
+        or _RATING_RE.fullmatch(tag)
+    ):
+        return False
+    return not artist or tag != normalize_tag_name(str(artist))
 
 
 def _normalize_totals(values: dict[str, float]) -> dict[str, float]:

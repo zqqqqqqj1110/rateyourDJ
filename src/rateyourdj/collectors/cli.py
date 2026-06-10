@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 
-from .album import collect_album
+from .album import collect_album, rebuild_user_profile
 from .catalog import ALBUMS_BY_KEY, BATCH_1, BATCH_2
 from .lastfm import LastfmCollector
 from .musicbrainz import MusicBrainzCollector
@@ -19,14 +19,43 @@ def build_parser() -> argparse.ArgumentParser:
         "album_key",
         choices=["all", "batch-1", "batch-2", *sorted(ALBUMS_BY_KEY)],
     )
-    album.add_argument("--user-id", default="demo-user")
+    album.add_argument(
+        "--user-id",
+        help=(
+            "also add collected tracks to this user's collection; "
+            "omit to build only the L2 candidate library"
+        ),
+    )
     album.add_argument("--song-data-dir", default="data/song_profiles")
     album.add_argument("--user-data-dir", default="data/user_profiles")
+
+    rebuild = subparsers.add_parser(
+        "rebuild-profile",
+        help="rebuild L1 preferences from its current collection song IDs",
+    )
+    rebuild.add_argument("user_id")
+    rebuild.add_argument("--song-data-dir", default="data/song_profiles")
+    rebuild.add_argument("--user-data-dir", default="data/user_profiles")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.command == "rebuild-profile":
+        profile = rebuild_user_profile(
+            args.user_id,
+            song_data_dir=args.song_data_dir,
+            user_data_dir=args.user_data_dir,
+        )
+        print(
+            json.dumps(
+                profile.to_dict(),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
     if args.command == "album":
         missing = [
             name

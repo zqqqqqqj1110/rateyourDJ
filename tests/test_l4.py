@@ -74,6 +74,16 @@ class FakeRetrievalService:
         )
 
 
+class RecordingRetrievalService(FakeRetrievalService):
+    def __init__(self, candidates: list[RetrievalCandidate]) -> None:
+        super().__init__(candidates)
+        self.max_per_artist: int | None = None
+
+    def retrieve(self, user_id: str, **kwargs: object) -> RetrievalResult:
+        self.max_per_artist = int(kwargs["max_per_artist"])
+        return super().retrieve(user_id, **kwargs)
+
+
 class L4ScoringTests(unittest.TestCase):
     def test_score_breakdown_uses_documented_weights(self) -> None:
         profile = UserProfile(
@@ -275,6 +285,24 @@ class L4RankingTests(unittest.TestCase):
             service.rank("user-1", top_k=0)
         with self.assertRaises(ValueError):
             service.rank("user-1", top_k=2, candidate_pool_size=1)
+
+    def test_passes_artist_limit_to_candidate_pool_retrieval(self) -> None:
+        self.profile_store.save(UserProfile(user_id="user-1"))
+        retrieval = RecordingRetrievalService([])
+        service = RecommendationRankingService(
+            self.profile_store,
+            self.song_store,
+            retrieval,
+        )
+
+        service.rank(
+            "user-1",
+            top_k=2,
+            candidate_pool_size=10,
+            max_per_artist=2,
+        )
+
+        self.assertEqual(retrieval.max_per_artist, 2)
 
 
 class L4CliTests(unittest.TestCase):

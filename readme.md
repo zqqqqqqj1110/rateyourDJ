@@ -197,10 +197,17 @@ export SPOTIFY_CLIENT_SECRET="..."
 export LASTFM_API_KEY="..."
 ```
 
-重新安装命令入口并开始采集：
+重新安装命令入口并开始采集候选库：
 
 ```bash
 python -m pip install -e .
+rateyourdj-collect album pink-floyd-the-wall
+```
+
+默认只写入 L2 候选库。只有这些歌曲确实属于某个用户收藏时，才显式传入
+`--user-id`：
+
+```bash
 rateyourdj-collect album pink-floyd-the-wall --user-id demo-user
 ```
 
@@ -220,13 +227,13 @@ pink-floyd-the-wall
 第一批 8 张专辑、共 145 首：
 
 ```bash
-rateyourdj-collect album batch-1 --user-id demo-user
+rateyourdj-collect album batch-1
 ```
 
 第二批 10 张专辑、共 139 首：
 
 ```bash
-rateyourdj-collect album batch-2 --user-id demo-user
+rateyourdj-collect album batch-2
 ```
 
 目前 `all` 会采集全部 18 张专辑、共 284 首。
@@ -234,13 +241,13 @@ rateyourdj-collect album batch-2 --user-id demo-user
 例如：
 
 ```bash
-rateyourdj-collect album frank-sinatra-in-the-wee-small-hours --user-id demo-user
-rateyourdj-collect album sly-and-the-family-stone-theres-a-riot-goin-on --user-id demo-user
-rateyourdj-collect album elvis-costello-this-years-model-expanded --user-id demo-user
-rateyourdj-collect album bob-dylan-1963 --user-id demo-user
-rateyourdj-collect album the-who-tommy --user-id demo-user
-rateyourdj-collect album creedence-clearwater-revival-green-river --user-id demo-user
-rateyourdj-collect album elton-john-goodbye-yellow-brick-road-expanded --user-id demo-user
+rateyourdj-collect album frank-sinatra-in-the-wee-small-hours
+rateyourdj-collect album sly-and-the-family-stone-theres-a-riot-goin-on
+rateyourdj-collect album elvis-costello-this-years-model-expanded
+rateyourdj-collect album bob-dylan-1963
+rateyourdj-collect album the-who-tommy
+rateyourdj-collect album creedence-clearwater-revival-green-river
+rateyourdj-collect album elton-john-goodbye-yellow-brick-road-expanded
 ```
 
 采集结果：
@@ -253,8 +260,15 @@ data/user_profiles/demo-user.json
 ```
 
 批量任务会采集 Spotify metadata、MusicBrainz metadata 和 Last.fm tags，
-调用 L2 完成版本匹配、genre 标准化、置信度计算与落盘，随后更新 L1 的
-`collection_song_ids` 及 artist、genre、tag preferences。
+调用 L2 完成版本匹配、genre 标准化、置信度计算与落盘。传入 `--user-id`
+时，才会同时更新该用户 L1 的 `collection_song_ids` 及
+artist、genre、tag preferences。
+
+手工调整收藏 ID 后，使用以下命令从当前收藏重新构建偏好：
+
+```bash
+rateyourdj-collect rebuild-profile demo-user
+```
 
 
 

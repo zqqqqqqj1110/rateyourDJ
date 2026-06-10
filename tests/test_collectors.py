@@ -6,8 +6,12 @@ from pathlib import Path
 from rateyourdj.collectors.album import (
     PINK_FLOYD_THE_WALL,
     collect_album,
+    rebuild_user_profile,
     song_id_for,
 )
+from rateyourdj.collectors.cli import build_parser
+from rateyourdj.l1 import JsonProfileStore, UserProfile
+from rateyourdj.l2 import JsonSongStore, SongProfile
 from rateyourdj.collectors.catalog import ALBUMS_BY_KEY, BATCH_2
 from rateyourdj.l2.matching import normalize_identity
 
@@ -63,6 +67,11 @@ class TimeoutSpotify:
 
 
 class AlbumCollectorTests(unittest.TestCase):
+    def test_album_collection_does_not_default_to_a_user(self):
+        args = build_parser().parse_args(["album", "pink-floyd-the-wall"])
+
+        self.assertIsNone(args.user_id)
+
     def test_catalog_contains_requested_album_editions(self):
         first_batch_counts = {
             "pink-floyd-the-wall": 26,
@@ -182,6 +191,60 @@ class AlbumCollectorTests(unittest.TestCase):
             self.assertEqual(result["stored_tracks"], len(album.tracks))
             self.assertEqual(len(result["failures"]), len(album.tracks))
             self.assertIn("spotify: read operation timed out", result["failures"][0]["error"])
+
+    def test_rebuild_profile_uses_only_current_collection_and_filters_noise(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            song_dir = root / "songs"
+            user_dir = root / "users"
+            song_store = JsonSongStore(song_dir)
+            user_store = JsonProfileStore(user_dir)
+
+            selected = SongProfile.empty("selected")
+            selected.metadata["artist"] = "Selected Artist"
+            selected.genres = {"rock": 1.0}
+            selected.source_tags["lastfm_track_tags"] = {
+                "rock": 1.0,
+                "1979": 0.8,
+                "selected artist": 0.6,
+                "wrong track streaming": 0.5,
+            }
+            ignored = SongProfile.empty("ignored")
+            ignored.metadata["artist"] = "Ignored Artist"
+            ignored.genres = {"jazz": 1.0}
+            same_artist = SongProfile.empty("same-artist")
+            same_artist.metadata["artist"] = "SELECTED ARTIST"
+            same_artist.genres = {"rock": 1.0}
+            song_store.save(selected)
+            song_store.save(ignored)
+            song_store.save(same_artist)
+            user_store.save(
+                UserProfile(
+                    user_id="user-1",
+                    collection_song_ids=["selected", "same-artist"],
+                    artist_preferences={"Ignored Artist": 1.0},
+                    genre_preferences={"jazz": 1.0},
+                    tag_preferences={"1979": 1.0},
+                )
+            )
+
+            rebuild_user_profile(
+                "user-1",
+                song_data_dir=song_dir,
+                user_data_dir=user_dir,
+            )
+
+            rebuilt = user_store.load("user-1")
+            self.assertEqual(
+                rebuilt.collection_song_ids,
+                ["selected", "same-artist"],
+            )
+            self.assertEqual(
+                rebuilt.artist_preferences,
+                {"Selected Artist": 1.0},
+            )
+            self.assertEqual(rebuilt.genre_preferences, {"rock": 1.0})
+            self.assertEqual(rebuilt.tag_preferences, {"rock": 1.0})
 
 
 if __name__ == "__main__":

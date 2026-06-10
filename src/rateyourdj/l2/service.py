@@ -57,5 +57,9 @@ class SongProfileService:
             musicbrainz=musicbrainz,
             lastfm=lastfm,
         )
+        if self.store.exists(song_id):
+            existing = self.store.load(song_id)
+            profile.version = existing.version + 1
+            profile.updated_at = datetime.now(timezone.utc).isoformat()
         self.store.save(profile)
         return profile

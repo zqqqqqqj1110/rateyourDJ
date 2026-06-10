@@ -238,6 +238,23 @@ class SongMergerTests(unittest.TestCase):
             profile.data_source["external_ids.spotify_track_id"], ["Spotify"]
         )
 
+    def test_recollecting_a_song_increments_the_profile_version(self) -> None:
+        first = self.service.merge_and_save_sources(
+            "wonderwall-oasis",
+            spotify=SPOTIFY_ORIGINAL,
+        )
+        second = self.service.merge_and_save_sources(
+            "wonderwall-oasis",
+            spotify=SPOTIFY_REMASTERED,
+        )
+
+        self.assertEqual(first.version, 1)
+        self.assertEqual(second.version, 2)
+        self.assertEqual(
+            self.service.get_song_profile("wonderwall-oasis").version,
+            2,
+        )
+
     def test_functional_merge_api_writes_requested_directory(self) -> None:
         profile = merge_and_store_song(
             "wonderwall",
