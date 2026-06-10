@@ -712,25 +712,241 @@ PYTHONPATH=src python3 -m unittest tests.test_l4 -v
 
 # L5
 
-L5 负责记录反馈、计算 reward，并把反馈转换为 L4 可使用的正负调整分。反馈
-保存在 L1 的 `feedback_memory`，不新增另一份用户状态文件。
+## L5 是什么
+
+L5 是推荐反馈闭环。它负责：
+
+- 接收用户对某首 L2 歌曲的行为反馈。
+- 将反馈类型转换为 `[-1, 1]` reward。
+- 把原始反馈写入 L1 `feedback_memory`。
+- 根据直接反馈或相似歌曲反馈计算 `FeedbackScore`。
+- 将反馈分提供给 L4，影响下一次排序。
+- 对 `favorite` 和 `playlist_add` 同步更新用户收藏。
+
+L5 不创建单独的反馈文件，数据继续保存在：
+
+```text
+data/user_profiles/<user_id>.json
+```
+
+单条反馈结构：
+
+```json
+{
+  "feedback_type": "like",
+  "song_id": "pink-floyd-the-wall-14-hey-you",
+  "timestamp": "2026-06-11T00:00:00+10:00",
+  "reward_score": 0.6,
+  "recommendation_context": {
+    "rank": 1,
+    "source": "l4"
+  }
+}
+```
+
+字段含义：
+
+| 字段 | 含义 |
+| --- | --- |
+| `feedback_type` | 用户行为类型 |
+| `song_id` | 必须存在的 L2 song ID |
+| `timestamp` | ISO-8601 时间；省略时自动生成 UTC 时间 |
+| `reward_score` | `[-1, 1]` 内的奖励值 |
+| `recommendation_context` | 可选的推荐位置、查询、来源等上下文 |
+
+## Reward 映射
+
+| 反馈类型 | 默认 reward | 含义 |
+| --- | ---: | --- |
+| `play` | 0.1 | 普通播放 |
+| `play_complete` | 0.4 | 完整播放 |
+| `replay` | 0.5 | 重复播放 |
+| `like` | 0.6 | 明确喜欢 |
+| `favorite` | 0.8 | 收藏歌曲 |
+| `playlist_add` | 1.0 | 加入歌单 |
+| `skip` | -0.4 | 普通跳过 |
+| `quick_skip` | -0.8 | 快速跳过 |
+| `dislike` | -1.0 | 明确不喜欢 |
+
+调用代码接口时可以显式覆盖默认 reward，但值必须在 `[-1, 1]` 内。CLI
+对应参数是 `--reward-score`。
+
+## 反馈分计算
+
+### 直接反馈
+
+如果候选歌曲本身有反馈，使用该歌曲最新一条非零 reward：
+
+```text
+FeedbackScore(candidate) = latest direct reward
+```
+
+例如对 `Hey You` 记录 `like`：
+
+```text
+FeedbackScore(Hey You) = 0.6
+L4 feedback_adjustment = 0.15 * 0.6 = 0.09
+```
+
+### 相似歌曲传播
+
+候选没有直接反馈时，L5 会比较它与历史反馈歌曲：
+
+```text
+FeedbackSimilarity =
+0.25 * SameArtist
++ 0.35 * GenreSimilarity
++ 0.40 * TagSimilarity
+```
+
+genre 和 tag 使用带权 Jaccard。相似度低于 `0.30` 的反馈不传播；达到阈值
+时按相似度衰减：
+
+```text
+TransferredFeedback =
+sum(HistoryReward * FeedbackSimilarity)
+
+FeedbackScore =
+clamp(TransferredFeedback, -1, 1)
+```
+
+因此一条 `like` 不会给所有候选相同加分：
+
+- 原歌曲保留完整反馈。
+- 高度相似歌曲获得接近但小于完整值的反馈。
+- 弱相关或无关歌曲反馈分为 0。
+
+## L5 对 L1 和 L4 的影响
+
+普通行为反馈，例如 `like`、`skip`、`dislike`，只写入
+`feedback_memory`，不会永久修改收藏聚合出的 artist/genre/tag preferences。
+
+`favorite` 和 `playlist_add` 会额外执行：
+
+1. 将歌曲加入 L1 `collection_song_ids`。
+2. 从当前全部收藏 L2 文件重新聚合偏好。
+3. 使 L3 后续将该歌曲作为已收藏歌曲过滤。
+
+L4 基础分包含：
+
+```text
++ 0.15 * FeedbackScore
+```
+
+输出位于：
+
+```text
+score_breakdown.feedback_adjustment
+```
+
+正反馈会产生 `promoted by positive feedback` 排序原因，负反馈会产生
+`penalized by negative feedback`。
+
+## 运行 L5
+
+查看 schema 和 reward：
 
 ```bash
 PYTHONPATH=src python3 -m rateyourdj.l5.cli schema
-PYTHONPATH=src python3 -m rateyourdj.l5.cli record demo-user <song-id> like
+```
+
+记录反馈：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l5.cli record \
+  demo-user pink-floyd-the-wall-14-hey-you like
+```
+
+显式指定 reward：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l5.cli record \
+  demo-user pink-floyd-the-wall-14-hey-you play \
+  --reward-score 0.25
+```
+
+保存推荐上下文。先建立 `recommendation-context.json`：
+
+```json
+{
+  "rank": 1,
+  "query": "推荐一些 Pink Floyd 风格的歌曲",
+  "source": "l4"
+}
+```
+
+然后执行：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l5.cli record \
+  demo-user pink-floyd-the-wall-14-hey-you skip \
+  --context-json recommendation-context.json
+```
+
+查看反馈摘要：
+
+```bash
 PYTHONPATH=src python3 -m rateyourdj.l5.cli summary demo-user
+```
+
+输出包括反馈总数、正负反馈数量、平均 reward、各反馈类型数量和缺失的 L2
+song ID。
+
+查看某首歌曲当前获得的反馈分：
+
+```bash
 PYTHONPATH=src python3 -m rateyourdj.l5.cli score demo-user <song-id>
 ```
 
-直接反馈使用同一歌曲最近一次记录。没有直接反馈时，L5 根据 artist、genres
-和 tags 相似度衰减传播历史 reward，相似度低于 `0.30` 时不传播。L4 使用
-`0.15 * FeedbackScore` 调整基础分，最终分数限制在 0 到 1。
+如果已通过 editable install 注册命令，也可以省略 `PYTHONPATH`：
 
-`favorite` 和 `playlist_add` 还会把歌曲加入 L1 收藏并重新聚合收藏偏好，
-使 L3 后续不再把它作为未收藏候选返回。
+```bash
+rateyourdj-l5 summary demo-user
+```
+
+## 检查 L5
+
+检查反馈是否写入 L1：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l1.cli show demo-user
+```
+
+检查反馈是否影响 L4：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l4.cli rank demo-user --top-k 5
+```
+
+重点查看：
+
+- 被直接 `like` 的歌曲是否有正 `feedback_adjustment`。
+- 相似歌曲是否获得衰减后的较小调整。
+- 无关歌曲的 `feedback_adjustment` 是否为 0。
+- `dislike` 或 `quick_skip` 是否降低候选分数。
+- `favorite` 后歌曲是否从 L3 候选中消失。
 
 运行 L5 测试：
 
 ```bash
 PYTHONPATH=src python3 -m unittest tests.test_l5 -v
 ```
+
+运行全部离线测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+## 常见问题
+
+| 问题 | 含义和处理 |
+| --- | --- |
+| `SongNotFoundError` | 反馈的 song ID 不存在对应 L2 JSON |
+| `feedback_type must be one of ...` | 反馈类型不在支持列表中 |
+| `reward_score must be between -1 and 1` | 自定义 reward 超出范围 |
+| `timestamp must be an ISO-8601 string` | 时间格式不合法 |
+| 其他歌曲也有反馈加分 | 它们与历史反馈歌曲的相似度达到 `0.30` |
+| 无关歌曲仍有相同加分 | 应检查是否运行了当前版本以及相似度传播测试 |
+| `favorite` 后仍在候选中 | 检查 L1 是否成功加入 song ID，并重新运行 L3 |
+| CLI 命令不存在 | 使用 `PYTHONPATH=src python3 -m rateyourdj.l5.cli ...` 或重新安装项目 |
