@@ -262,6 +262,33 @@ data/user_profiles/demo-user.json
 
 L3 从用户收藏歌曲出发寻找相似歌曲，并排除用户已经收藏的歌曲。
 
+### L3 实现状态
+
+- 已实现本地 L2 候选库扫描。
+- 已实现 track tags、genres、artist tags 和 release year 加权相似度。
+- 已实现收藏歌曲、external ID 和重复版本过滤。
+- 已实现多种子结果合并、同歌手数量限制和 Top-K 截断。
+- 缺少 L2 JSON 的收藏 song_id 会出现在 `missing_seed_song_ids`，不会中断召回。
+- Last.fm similar tracks 在线召回尚未接入。
+
+运行本地召回：
+
+```bash
+rateyourdj-l3 retrieve demo-user --top-k 20
+```
+
+未安装命令行入口时：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l3.cli retrieve demo-user --top-k 20
+```
+
+查看输出 schema：
+
+```bash
+rateyourdj-l3 schema
+```
+
 ### 输入字段
 
 | 字段 | 来源 | 当前状态 | 用途 |
@@ -298,7 +325,10 @@ Similarity =
 ```json
 {
   "candidate_song_id": "song-002",
-  "seed_song_ids": ["song-001"],
+  "best_seed_song_id": "song-001",
+  "matched_seed_song_ids": ["song-001", "song-003"],
+  "best_seed_score": 0.86,
+  "top_seed_average_score": 0.73,
   "similarity_score": 0.82,
   "score_breakdown": {
     "track_tags": 0.48,
@@ -309,6 +339,18 @@ Similarity =
   "retrieval_sources": ["lastfm_similar_tracks"]
 }
 ```
+
+候选的最终分数用于衡量整体收藏偏好：
+
+```text
+Similarity =
+0.70 * BestSeedScore
++ 0.30 * Top5SeedAverageScore
+```
+
+候选仍会与全部收藏种子逐一比较。`BestSeedScore` 保留强相似歌曲，
+`Top5SeedAverageScore` 衡量候选是否同时符合多首收藏歌曲。种子不足 5 首时，
+使用全部有效种子计算平均值。
 
 ## L4 推荐排序
 

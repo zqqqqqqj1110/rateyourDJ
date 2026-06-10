@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 [project.scripts]
 rateyourdj-l1 = "rateyourdj.l1.cli:main"
 rateyourdj-l2 = "rateyourdj.l2.cli:main"
+rateyourdj-l3 = "rateyourdj.l3.cli:main"
 rateyourdj-collect = "rateyourdj.collectors.cli:main"
 
 [tool.setuptools.packages.find]
