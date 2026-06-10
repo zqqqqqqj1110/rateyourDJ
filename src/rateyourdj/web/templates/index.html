@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>rateyourDJ</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <header class="site-header">
+      <a class="brand" href="/">
+        <span class="brand-mark">RY</span>
+        <span>
+          <strong>rateyourDJ</strong>
+          <small>local recommendation studio</small>
+        </span>
+      </a>
+      <div class="status-pill"><span></span> L1-L5 online</div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">YOUR COLLECTION, REMIXED</p>
+          <h1>从收藏出发，<br><em>找到下一首歌。</em></h1>
+          <p class="hero-copy">
+            本地歌曲画像、相似度召回、偏好排序和反馈闭环，现在都在一个页面里。
+          </p>
+        </div>
+        <form id="controls" class="control-panel">
+          <label>
+            用户
+            <input id="user-id" value="demo-user" autocomplete="off">
+          </label>
+          <label>
+            推荐数量
+            <select id="top-k">
+              <option value="5">5 首</option>
+              <option value="10" selected>10 首</option>
+              <option value="20">20 首</option>
+            </select>
+          </label>
+          <button type="submit" class="primary-button">生成推荐</button>
+        </form>
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel profile-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">PROFILE</p>
+              <h2>收藏画像</h2>
+            </div>
+            <span id="profile-version" class="meta-label">v-</span>
+          </div>
+          <div class="stat-row">
+            <div><strong id="collection-count">-</strong><span>收藏歌曲</span></div>
+            <div><strong id="feedback-count">-</strong><span>反馈事件</span></div>
+            <div><strong id="average-reward">-</strong><span>平均奖励</span></div>
+          </div>
+          <div class="preference-block">
+            <span>偏好歌手</span>
+            <div id="top-artists" class="chips"></div>
+          </div>
+          <div class="preference-block">
+            <span>偏好流派</span>
+            <div id="top-genres" class="chips"></div>
+          </div>
+        </article>
+
+        <article class="panel feedback-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-label">FEEDBACK LOOP</p>
+              <h2>反馈状态</h2>
+            </div>
+          </div>
+          <div class="feedback-meter">
+            <div id="positive-bar" class="positive-bar"></div>
+            <div id="negative-bar" class="negative-bar"></div>
+          </div>
+          <div class="feedback-legend">
+            <span><i class="positive-dot"></i><b id="positive-count">0</b> 正反馈</span>
+            <span><i class="negative-dot"></i><b id="negative-count">0</b> 负反馈</span>
+          </div>
+          <p class="feedback-note">
+            喜欢与跳过会调整下一次排序；收藏与加入歌单还会更新 L1 收藏画像。
+          </p>
+        </article>
+      </section>
+
+      <section class="collection-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">YOUR COLLECTION</p>
+            <h2>我的收藏</h2>
+          </div>
+          <p id="collection-meta">等待载入收藏</p>
+        </div>
+        <div id="collection" class="collection-grid"></div>
+      </section>
+
+      <section class="recommendations-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">RECOMMENDATIONS</p>
+            <h2>为你挑选</h2>
+          </div>
+          <p id="result-meta">等待生成推荐</p>
+        </div>
+        <div id="message" class="message hidden"></div>
+        <div id="recommendations" class="track-list"></div>
+      </section>
+    </main>
+
+    <template id="track-template">
+      <article class="track-card">
+        <div class="rank-number"></div>
+        <div class="track-main">
+          <div class="track-title-row">
+            <div>
+              <h3 class="track-title"></h3>
+              <p class="track-artist"></p>
+            </div>
+            <div class="score-badge"><strong></strong><span>score</span></div>
+          </div>
+          <div class="reason-list"></div>
+          <details>
+            <summary>查看分数拆解</summary>
+            <div class="score-breakdown"></div>
+          </details>
+        </div>
+        <div class="feedback-actions">
+          <button data-feedback="like" title="喜欢">喜欢</button>
+          <button data-feedback="skip" title="跳过">跳过</button>
+          <button data-feedback="dislike" title="不喜欢">不喜欢</button>
+          <button data-feedback="favorite" class="accent-action" title="收藏">收藏</button>
+        </div>
+      </article>
+    </template>
+
+    <template id="collection-template">
+      <article class="collection-card">
+        <div class="collection-art"><span>RY</span></div>
+        <div class="collection-copy">
+          <div class="collection-title-row">
+            <h3 class="collection-title"></h3>
+            <span class="favorite-label hidden">新收藏</span>
+          </div>
+          <p class="collection-artist"></p>
+          <p class="collection-album"></p>
+          <div class="collection-genres"></div>
+        </div>
+      </article>
+    </template>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+</html>

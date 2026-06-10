@@ -7,6 +7,7 @@ name = "rateyourdj"
 version = "0.1.0"
 description = "Personalized music recommendation agent"
 requires-python = ">=3.10"
+dependencies = ["Flask>=3.0,<4"]
 
 [project.scripts]
 rateyourdj-l1 = "rateyourdj.l1.cli:main"
@@ -14,7 +15,11 @@ rateyourdj-l2 = "rateyourdj.l2.cli:main"
 rateyourdj-l3 = "rateyourdj.l3.cli:main"
 rateyourdj-l4 = "rateyourdj.l4.cli:main"
 rateyourdj-l5 = "rateyourdj.l5.cli:main"
+rateyourdj-web = "rateyourdj.web.app:main"
 rateyourdj-collect = "rateyourdj.collectors.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"rateyourdj.web" = ["templates/*.html", "static/*.css", "static/*.js"]

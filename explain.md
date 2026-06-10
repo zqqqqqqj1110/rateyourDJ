@@ -950,3 +950,29 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | 无关歌曲仍有相同加分 | 应检查是否运行了当前版本以及相似度传播测试 |
 | `favorite` 后仍在候选中 | 检查 L1 是否成功加入 song ID，并重新运行 L3 |
 | CLI 命令不存在 | 使用 `PYTHONPATH=src python3 -m rateyourdj.l5.cli ...` 或重新安装项目 |
+
+# 本地网页
+
+网页层直接复用 L1-L5 服务，提供用户画像、推荐列表、反馈摘要和反馈按钮。
+它使用 Flask 和原生 HTML/CSS/JavaScript，不需要 Node.js 或前端构建步骤。
+
+启动：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.web.app
+```
+
+访问：
+
+```text
+http://127.0.0.1:8000
+```
+
+页面中的反馈按钮会真实修改当前用户的 L1 JSON。`favorite` 会加入收藏，
+其他按钮会写入 L5 feedback 并影响下一次 L4 排序。
+
+运行网页 API 测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_web -v
+```
