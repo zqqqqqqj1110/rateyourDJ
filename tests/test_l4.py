@@ -115,9 +115,22 @@ class L4ScoringTests(unittest.TestCase):
                 "genre_preference": 0.14,
                 "tag_preference": 0.18,
                 "quality": 0.1,
+                "feedback_adjustment": 0.0,
             },
         )
-        self.assertTrue(all(value == 1.0 for value in raw_scores.values()))
+        self.assertEqual(raw_scores["feedback"], 0.0)
+        self.assertTrue(
+            all(
+                raw_scores[name] == 1.0
+                for name in (
+                    "retrieval",
+                    "artist_preference",
+                    "genre_preference",
+                    "tag_preference",
+                    "quality",
+                )
+            )
+        )
 
 
 class L4RankingTests(unittest.TestCase):
@@ -178,6 +191,83 @@ class L4RankingTests(unittest.TestCase):
             "matches the collection tag profile",
             result.ranked_songs[0].ranking_reasons,
         )
+
+    def test_feedback_can_rerank_candidates(self) -> None:
+        self.profile_store.save(
+            UserProfile(
+                user_id="user-1",
+                feedback_memory=[
+                    {
+                        "feedback_type": "dislike",
+                        "song_id": "higher-retrieval",
+                        "timestamp": "2026-06-11T00:00:00+00:00",
+                        "reward_score": -1.0,
+                        "recommendation_context": {},
+                    }
+                ],
+            )
+        )
+        for song_id in ("higher-retrieval", "lower-retrieval"):
+            self.song_store.save(
+                make_song(
+                    song_id,
+                    title=song_id,
+                    artist=song_id,
+                )
+            )
+
+        result = self._service(
+            [
+                make_candidate("higher-retrieval", 0.8),
+                make_candidate("lower-retrieval", 0.6),
+            ]
+        ).rank("user-1", top_k=2, candidate_pool_size=2)
+
+        self.assertEqual(
+            [song.song_id for song in result.ranked_songs],
+            ["lower-retrieval", "higher-retrieval"],
+        )
+        disliked = result.ranked_songs[1]
+        self.assertEqual(disliked.score_breakdown["feedback_adjustment"], -0.15)
+        self.assertIn(
+            "penalized by negative feedback",
+            disliked.ranking_reasons,
+        )
+
+    def test_positive_feedback_keeps_final_score_bounded(self) -> None:
+        self.profile_store.save(
+            UserProfile(
+                user_id="user-1",
+                artist_preferences={"Artist": 1.0},
+                genre_preferences={"rock": 1.0},
+                tag_preferences={"rock": 1.0},
+                feedback_memory=[
+                    {
+                        "feedback_type": "playlist_add",
+                        "song_id": "candidate",
+                        "timestamp": "2026-06-11T00:00:00+00:00",
+                        "reward_score": 1.0,
+                        "recommendation_context": {},
+                    }
+                ],
+            )
+        )
+        self.song_store.save(
+            make_song(
+                "candidate",
+                title="Candidate",
+                artist="Artist",
+                tags={"rock": 1.0},
+                genres={"rock": 1.0},
+            )
+        )
+
+        result = self._service(
+            [make_candidate("candidate", 1.0)]
+        ).rank("user-1", top_k=1, candidate_pool_size=1)
+
+        self.assertEqual(result.ranked_songs[0].base_score, 1.15)
+        self.assertEqual(result.ranked_songs[0].final_score, 1.0)
 
     def test_diversity_penalty_promotes_a_distinct_second_song(self) -> None:
         self.profile_store.save(UserProfile(user_id="user-1"))

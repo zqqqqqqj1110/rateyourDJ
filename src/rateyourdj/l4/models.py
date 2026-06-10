@@ -13,6 +13,7 @@ BASE_SCORE_WEIGHTS = {
 }
 
 DIVERSITY_PENALTY_WEIGHT = 0.15
+FEEDBACK_ADJUSTMENT_WEIGHT = 0.15
 
 DIVERSITY_SIMILARITY_WEIGHTS = {
     "artist": 0.20,
@@ -82,6 +83,12 @@ def ranking_schema() -> dict[str, Any]:
         "score_breakdown": {
             name: f"weighted contribution (weight={weight})"
             for name, weight in BASE_SCORE_WEIGHTS.items()
+        }
+        | {
+            "feedback_adjustment": (
+                "signed L5 feedback contribution "
+                f"(weight={FEEDBACK_ADJUSTMENT_WEIGHT})"
+            )
         },
         "diversity_penalty": (
             "similarity to already selected songs * "

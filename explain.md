@@ -638,6 +638,7 @@ BaseScore =
 + 0.14 * GenrePreference
 + 0.18 * TagPreference
 + 0.10 * ProfileQuality
++ 0.15 * FeedbackScore
 ```
 
 genre 和 tag 使用带权 Jaccard 匹配。artist 在忽略大小写和多余空格后精确
@@ -653,7 +654,7 @@ DiversitySimilarity =
 + 0.40 * TagSimilarity
 
 FinalScore =
-max(0, BaseScore - 0.15 * MaxDiversitySimilarity)
+clamp(BaseScore - 0.15 * MaxDiversitySimilarity, 0, 1)
 ```
 
 因此第一首歌曲没有多样性惩罚，后续歌曲如果与前面结果的 artist、genres
@@ -692,8 +693,8 @@ PYTHONPATH=src python3 -m rateyourdj.l4.cli schema
 | `rank` | 最终名次 |
 | `song_id` | L2 song ID |
 | `title` / `artist` | L2 展示字段 |
-| `base_score` | 五项基础贡献之和 |
-| `score_breakdown` | L3、三类偏好和质量的加权贡献 |
+| `base_score` | 基础贡献与 L5 反馈调整之和 |
+| `score_breakdown` | L3、三类偏好、质量和反馈的加权贡献 |
 | `diversity_penalty` | 与更高排名歌曲重复产生的惩罚 |
 | `final_score` | `base_score - diversity_penalty` |
 | `ranking_reasons` | 可读的主要排序原因 |
@@ -707,4 +708,29 @@ PYTHONPATH=src python3 -m rateyourdj.l4.cli schema
 
 ```bash
 PYTHONPATH=src python3 -m unittest tests.test_l4 -v
+```
+
+# L5
+
+L5 负责记录反馈、计算 reward，并把反馈转换为 L4 可使用的正负调整分。反馈
+保存在 L1 的 `feedback_memory`，不新增另一份用户状态文件。
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l5.cli schema
+PYTHONPATH=src python3 -m rateyourdj.l5.cli record demo-user <song-id> like
+PYTHONPATH=src python3 -m rateyourdj.l5.cli summary demo-user
+PYTHONPATH=src python3 -m rateyourdj.l5.cli score demo-user <song-id>
+```
+
+直接反馈使用同一歌曲最近一次记录。没有直接反馈时，L5 根据 artist、genres
+和 tags 相似度衰减传播历史 reward，相似度低于 `0.30` 时不传播。L4 使用
+`0.15 * FeedbackScore` 调整基础分，最终分数限制在 0 到 1。
+
+`favorite` 和 `playlist_add` 还会把歌曲加入 L1 收藏并重新聚合收藏偏好，
+使 L3 后续不再把它作为未收藏候选返回。
+
+运行 L5 测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_l5 -v
 ```

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from rateyourdj.l1 import JsonProfileStore
 from rateyourdj.l2 import JsonSongStore, SongProfile
 from rateyourdj.l3 import CandidateRetrievalService, RetrievalCandidate
+from rateyourdj.l5 import FeedbackSignalModel
 
 from .models import DIVERSITY_PENALTY_WEIGHT, RankedSong, RankingResult
 from .scoring import (
@@ -63,6 +64,7 @@ class RecommendationRankingService:
             raise ValueError("candidate_pool_size must be at least top_k")
 
         profile = self.profile_store.load(user_id)
+        feedback_model = FeedbackSignalModel(profile, self.song_store)
         retrieval = self.retrieval_service.retrieve(
             user_id,
             top_k=candidate_pool_size,
@@ -80,6 +82,7 @@ class RecommendationRankingService:
                 profile,
                 song,
                 candidate,
+                feedback_score=feedback_model.score(song),
             )
             remaining.append(
                 _ScoredCandidate(
@@ -114,7 +117,7 @@ class RecommendationRankingService:
                     6,
                 )
                 final_score = round(
-                    max(0.0, item.base_score - penalty),
+                    max(0.0, min(item.base_score - penalty, 1.0)),
                     6,
                 )
                 eligible.append((final_score, penalty, item))

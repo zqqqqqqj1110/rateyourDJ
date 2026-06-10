@@ -9,6 +9,7 @@ from rateyourdj.l3 import RetrievalCandidate, weighted_jaccard
 from .models import (
     BASE_SCORE_WEIGHTS,
     DIVERSITY_SIMILARITY_WEIGHTS,
+    FEEDBACK_ADJUSTMENT_WEIGHT,
 )
 
 
@@ -50,6 +51,8 @@ def score_candidate(
     profile: UserProfile,
     song: SongProfile,
     candidate: RetrievalCandidate,
+    *,
+    feedback_score: float = 0.0,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
     raw_scores = {
         "retrieval": candidate.similarity_score,
@@ -66,11 +69,16 @@ def score_candidate(
             candidate_tags(song),
         ),
         "quality": quality_score(song),
+        "feedback": max(-1.0, min(float(feedback_score), 1.0)),
     }
     breakdown = {
         name: round(raw_scores[name] * weight, 6)
         for name, weight in BASE_SCORE_WEIGHTS.items()
     }
+    breakdown["feedback_adjustment"] = round(
+        raw_scores["feedback"] * FEEDBACK_ADJUSTMENT_WEIGHT,
+        6,
+    )
     return round(sum(breakdown.values()), 6), breakdown, raw_scores
 
 
@@ -103,6 +111,11 @@ def ranking_reasons(
         reasons.append("strong similarity to the collection seeds")
     elif raw_scores["retrieval"] > 0:
         reasons.append("retrieved from collection-level song similarity")
+
+    if raw_scores.get("feedback", 0.0) >= 0.25:
+        reasons.append("promoted by positive feedback")
+    elif raw_scores.get("feedback", 0.0) <= -0.25:
+        reasons.append("penalized by negative feedback")
 
     preference_scores = (
         ("artist_preference", "matches a preferred artist"),
