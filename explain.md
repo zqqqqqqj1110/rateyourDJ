@@ -376,10 +376,15 @@ L1 collection_song_ids
 
 ## 相似度计算
 
-当前使用四类信号：
+L3 分两步计算分数：先计算候选与每首收藏歌曲的歌曲级相似度，再把多个
+歌曲级分数聚合成整体收藏相似度。
+
+### 歌曲级相似度
+
+候选与单首种子歌曲之间使用四类信号：
 
 ```text
-Similarity =
+PairwiseSimilarity =
 0.55 * TrackTagSimilarity
 + 0.25 * GenreSimilarity
 + 0.15 * ArtistTagSimilarity
@@ -396,7 +401,10 @@ Similarity =
 tags 和 genres 使用带权 Jaccard 相似度。标签权重越接近，共享标签越多，
 分数越高。发行年份相差越小，年代分越高；相差 30 年或以上时年代分为 0。
 
-每个候选先与全部收藏种子分别计算上述歌曲级相似度，再聚合为整体收藏分：
+### 整体收藏相似度
+
+每个候选都会与 L1 `collection_song_ids` 中所有能够成功加载 L2 JSON 的
+种子逐一计算 `PairwiseSimilarity`，然后聚合为最终分数：
 
 ```text
 CollectionSimilarity =
@@ -409,6 +417,9 @@ CollectionSimilarity =
 使用全部有效种子计算平均值。Top-5 中会保留 0 分种子，因此只与一首歌曲
 相似的候选会被适度降权。
 
+候选的排序、Top-K 截断和 `--min-score` 过滤都使用
+`CollectionSimilarity`，而不是只使用 `BestSeedScore`。
+
 `score_breakdown` 也按相同的 70% + 30% 公式聚合。它保存的是已经乘过歌曲
 特征权重和收藏聚合权重的贡献，因此四个分项相加等于
 `similarity_score`。
@@ -420,6 +431,14 @@ CollectionSimilarity =
 - `best_seed_score` 保存候选与最佳种子的歌曲级分数。
 - `top_seed_average_score` 保存 Top-5 种子的平均歌曲级分数。
 - `similarity_score` 和 `score_breakdown` 代表整体收藏聚合结果。
+
+例如某候选的最佳种子分是 `0.90`，Top-5 种子平均分是 `0.50`：
+
+```text
+similarity_score = 0.70 * 0.90 + 0.30 * 0.50 = 0.78
+```
+
+这意味着它与其中一首收藏歌曲非常相似，同时与整体收藏也有一定一致性。
 
 ## 准备测试用户
 
@@ -494,7 +513,9 @@ PYTHONPATH=src python3 -m rateyourdj.l3.cli schema
 {
   "user_id": "demo-user",
   "seed_song_ids": [
-    "pink-floyd-the-wall-19-comfortably-numb"
+    "pink-floyd-the-wall-01-in-the-flesh-question",
+    "pink-floyd-the-wall-19-comfortably-numb",
+    "pink-floyd-the-wall-22-run-like-hell"
   ],
   "missing_seed_song_ids": [],
   "candidates": [
@@ -502,14 +523,16 @@ PYTHONPATH=src python3 -m rateyourdj.l3.cli schema
       "candidate_song_id": "pink-floyd-the-wall-14-hey-you",
       "best_seed_song_id": "pink-floyd-the-wall-19-comfortably-numb",
       "matched_seed_song_ids": [
-        "pink-floyd-the-wall-19-comfortably-numb"
+        "pink-floyd-the-wall-01-in-the-flesh-question",
+        "pink-floyd-the-wall-19-comfortably-numb",
+        "pink-floyd-the-wall-22-run-like-hell"
       ],
       "best_seed_score": 0.956997,
-      "top_seed_average_score": 0.821,
-      "similarity_score": 0.916198,
+      "top_seed_average_score": 0.506538,
+      "similarity_score": 0.821859,
       "score_breakdown": {
-        "track_tags": 0.512838,
-        "genres": 0.244159,
+        "track_tags": 0.41027,
+        "genres": 0.211589,
         "artist_tags": 0.15,
         "release_year": 0.05
       },

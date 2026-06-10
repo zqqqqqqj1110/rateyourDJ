@@ -65,7 +65,7 @@ def retrieval_schema() -> dict[str, Any]:
     return {
         "candidate_song_id": "string",
         "best_seed_song_id": "string with the highest pairwise similarity",
-        "matched_seed_song_ids": ["string with similarity_score > 0"],
+        "matched_seed_song_ids": ["string with pairwise similarity > 0"],
         "best_seed_score": "highest pairwise similarity",
         "top_seed_average_score": f"average of the top {TOP_SEED_COUNT} seed scores",
         "similarity_score": (
