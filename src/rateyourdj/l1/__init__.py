@@ -1,12 +1,9 @@
-"""L1 user profile schema, dictionary migration and persistence."""
+"""L1 collection-profile schema, dictionary migration and persistence."""
 
 from .models import (
-    EXPLORATION_LEVELS,
     FEEDBACK_RECORD_FIELDS,
     FEEDBACK_TYPES,
-    LONG_TERM_FIELDS,
-    NEGATIVE_FIELDS,
-    SHORT_TERM_LIST_FIELDS,
+    PREFERENCE_FIELDS,
     ProfileValidationError,
     UserProfile,
     empty_profile_dict,
@@ -23,12 +20,9 @@ from .tools import (
 )
 
 __all__ = [
-    "EXPLORATION_LEVELS",
     "FEEDBACK_RECORD_FIELDS",
     "FEEDBACK_TYPES",
-    "LONG_TERM_FIELDS",
-    "NEGATIVE_FIELDS",
-    "SHORT_TERM_LIST_FIELDS",
+    "PREFERENCE_FIELDS",
     "JsonProfileStore",
     "ProfileNotFoundError",
     "ProfileValidationError",

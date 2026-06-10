@@ -6,9 +6,7 @@ import unittest
 from pathlib import Path
 
 from rateyourdj.l1 import (
-    LONG_TERM_FIELDS,
-    NEGATIVE_FIELDS,
-    SHORT_TERM_LIST_FIELDS,
+    PREFERENCE_FIELDS,
     JsonProfileStore,
     ProfileValidationError,
     UserProfile,
@@ -21,36 +19,27 @@ from rateyourdj.l1 import (
 
 
 class ProfileFrameworkTests(unittest.TestCase):
-    def test_empty_profile_contains_complete_l1_framework(self) -> None:
+    def test_empty_profile_matches_collection_schema(self) -> None:
         profile = empty_profile_dict("user-1")
 
-        self.assertEqual(
-            tuple(profile["long_term_preference"]), LONG_TERM_FIELDS
-        )
-        self.assertEqual(
-            tuple(profile["negative_preference"]), NEGATIVE_FIELDS
-        )
-        for field_name in SHORT_TERM_LIST_FIELDS:
-            self.assertEqual(profile["short_term_intent"][field_name], [])
-        self.assertEqual(
-            profile["short_term_intent"]["exploration_level"], "balanced"
-        )
+        self.assertEqual(profile["collection_song_ids"], [])
+        for field_name in PREFERENCE_FIELDS:
+            self.assertEqual(profile[field_name], {})
         self.assertEqual(profile["feedback_memory"], [])
+        self.assertEqual(profile["version"], 1)
 
-    def test_schema_describes_all_migration_sections(self) -> None:
+    def test_schema_describes_all_importable_fields(self) -> None:
         schema = profile_schema()
 
         self.assertEqual(
             set(schema),
             {
-                "long_term_preference",
-                "short_term_intent",
-                "negative_preference",
+                "collection_song_ids",
+                "artist_preferences",
+                "genre_preferences",
+                "tag_preferences",
                 "feedback_memory",
             },
-        )
-        self.assertEqual(
-            set(schema["long_term_preference"]), set(LONG_TERM_FIELDS)
         )
 
     def test_full_profile_round_trip(self) -> None:
@@ -61,27 +50,18 @@ class ProfileFrameworkTests(unittest.TestCase):
 
 
 class DictionaryValidationTests(unittest.TestCase):
-    def test_accepts_partial_dictionary_from_later_modules(self) -> None:
+    def test_accepts_collection_profile_patch(self) -> None:
         patch = validate_profile_patch(
             {
-                "long_term_preference": {
-                    "genres": {"britpop": 0.8},
-                    "artists": {"Oasis": 0.9},
-                },
-                "short_term_intent": {
-                    "reference_songs": ["Wonderwall"],
-                    "exploration_level": "safe",
-                },
-                "negative_preference": {
-                    "sound_textures": {"noisy": 0.7}
-                },
+                "collection_song_ids": ["song-1", "song-2", "song-1"],
+                "artist_preferences": {"Oasis": 0.8},
+                "genre_preferences": {"britpop": 0.9},
+                "tag_preferences": {"rock": 0.7},
                 "feedback_memory": [
                     {
                         "feedback_type": "favorite",
-                        "song_id": "song-1",
-                        "query": "current query",
-                        "timestamp": "2026-06-09T00:00:00+00:00",
-                        "song_tags": {"genres": ["britpop"]},
+                        "song_id": "song-3",
+                        "timestamp": "2026-06-10T00:00:00+00:00",
                         "reward_score": 0.8,
                     }
                 ],
@@ -89,45 +69,40 @@ class DictionaryValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            patch["long_term_preference"]["genres"]["britpop"], 0.8
+            patch["collection_song_ids"], ["song-1", "song-2"]
         )
-        self.assertEqual(
-            patch["short_term_intent"]["reference_songs"], ["Wonderwall"]
+        self.assertEqual(patch["artist_preferences"], {"Oasis": 0.8})
+        self.assertEqual(patch["genre_preferences"], {"britpop": 0.9})
+        self.assertEqual(patch["tag_preferences"], {"rock": 0.7})
+
+    def test_rejects_old_and_unknown_fields(self) -> None:
+        invalid_patches = (
+            {"long_term_preference": {}},
+            {"short_term_intent": {}},
+            {"negative_preference": {}},
+            {"unknown_section": {}},
         )
 
-    def test_rejects_unknown_fields(self) -> None:
-        with self.assertRaises(ProfileValidationError):
-            validate_profile_patch({"unknown_section": {}})
+        for patch in invalid_patches:
+            with self.subTest(patch=patch):
+                with self.assertRaises(ProfileValidationError):
+                    validate_profile_patch(patch)
 
-        with self.assertRaises(ProfileValidationError):
-            validate_profile_patch(
-                {"short_term_intent": {"unknown_field": []}}
-            )
+    def test_rejects_invalid_song_ids_weights_and_feedback(self) -> None:
+        invalid_patches = (
+            {"collection_song_ids": "song-1"},
+            {"collection_song_ids": [""]},
+            {"artist_preferences": {"Oasis": 1.2}},
+            {"genre_preferences": {"rock": True}},
+            {"tag_preferences": {"": 0.5}},
+            {"feedback_memory": [{"unknown_field": "value"}]},
+            {"feedback_memory": [{"feedback_type": "unknown"}]},
+        )
 
-    def test_rejects_invalid_weights_and_types(self) -> None:
-        with self.assertRaises(ProfileValidationError):
-            validate_profile_patch(
-                {"long_term_preference": {"genres": {"rock": 1.2}}}
-            )
-
-        with self.assertRaises(ProfileValidationError):
-            validate_profile_patch(
-                {"short_term_intent": {"genres": "rock"}}
-            )
-
-        with self.assertRaises(ProfileValidationError):
-            validate_profile_patch(
-                {
-                    "short_term_intent": {
-                        "exploration_level": "unknown"
-                    }
-                }
-            )
-
-        with self.assertRaises(ProfileValidationError):
-            validate_profile_patch(
-                {"feedback_memory": [{"unknown_field": "value"}]}
-            )
+        for patch in invalid_patches:
+            with self.subTest(patch=patch):
+                with self.assertRaises(ProfileValidationError):
+                    validate_profile_patch(patch)
 
 
 class ProfileMigrationTests(unittest.TestCase):
@@ -147,26 +122,50 @@ class ProfileMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(profile.to_dict(), stored)
-        self.assertEqual(
-            set(stored["long_term_preference"]), set(LONG_TERM_FIELDS)
+        self.assertEqual(stored["collection_song_ids"], [])
+        self.assertEqual(stored["genre_preferences"], {})
+
+    def test_existing_legacy_profile_is_migrated_and_persisted(self) -> None:
+        legacy = {
+            "user_id": "legacy-user",
+            "long_term_preference": {"genres": {"rock": 0.8}},
+            "short_term_intent": {"genres": ["rock"]},
+            "negative_preference": {"genres": {}},
+            "feedback_memory": [],
+            "version": 1,
+            "updated_at": "2026-06-09T00:00:00+00:00",
+        }
+        (self.root / "legacy-user.json").write_text(
+            json.dumps(legacy),
+            encoding="utf-8",
         )
 
-    def test_import_merges_weights_replaces_intent_fields_and_appends_memory(
-        self,
-    ) -> None:
+        profile = self.service.get_user_profile("legacy-user")
+        stored = json.loads(
+            (self.root / "legacy-user.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(profile.collection_song_ids, [])
+        self.assertEqual(profile.artist_preferences, {})
+        self.assertEqual(profile.genre_preferences, {})
+        self.assertEqual(profile.tag_preferences, {})
+        self.assertEqual(profile.version, 2)
+        self.assertNotIn("long_term_preference", stored)
+        self.assertEqual(stored, profile.to_dict())
+
+    def test_import_merges_collection_preferences_and_feedback(self) -> None:
         self.service.import_profile_patch(
             "user-1",
             {
-                "long_term_preference": {
-                    "genres": {"rock": 0.4},
-                    "artists": {"Oasis": 0.8},
-                },
-                "short_term_intent": {"genres": ["rock"]},
+                "collection_song_ids": ["song-1", "song-2"],
+                "artist_preferences": {"Oasis": 0.8},
+                "genre_preferences": {"rock": 0.4},
+                "tag_preferences": {"britpop": 0.9},
                 "feedback_memory": [
                     {
                         "feedback_type": "play",
-                        "song_id": "song-1",
-                        "timestamp": "2026-06-09T00:00:00+00:00",
+                        "song_id": "song-3",
+                        "timestamp": "2026-06-10T00:00:00+00:00",
                     }
                 ],
             },
@@ -174,18 +173,18 @@ class ProfileMigrationTests(unittest.TestCase):
         updated = self.service.import_profile_patch(
             "user-1",
             {
-                "long_term_preference": {
-                    "genres": {"britpop": 0.9}
+                "collection_song_ids": ["song-2", "song-4"],
+                "artist_preferences": {"Blur": 0.6},
+                "genre_preferences": {
+                    "rock": 0.5,
+                    "alternative": 0.7,
                 },
-                "short_term_intent": {"genres": ["britpop"]},
-                "negative_preference": {
-                    "sound_textures": {"noisy": 0.6}
-                },
+                "tag_preferences": {"90s": 0.4},
                 "feedback_memory": [
                     {
                         "feedback_type": "favorite",
-                        "song_id": "song-2",
-                        "timestamp": "2026-06-09T00:01:00+00:00",
+                        "song_id": "song-4",
+                        "timestamp": "2026-06-10T00:01:00+00:00",
                         "reward_score": 0.8,
                     }
                 ],
@@ -193,41 +192,39 @@ class ProfileMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            updated.long_term_preference["genres"],
-            {"rock": 0.4, "britpop": 0.9},
-        )
-        self.assertEqual(updated.long_term_preference["artists"], {"Oasis": 0.8})
-        self.assertEqual(updated.short_term_intent["genres"], ["britpop"])
-        self.assertEqual(
-            updated.negative_preference["sound_textures"], {"noisy": 0.6}
+            updated.collection_song_ids,
+            ["song-1", "song-2", "song-4"],
         )
         self.assertEqual(
-            updated.feedback_memory,
-            [
-                {
-                    "feedback_type": "play",
-                    "song_id": "song-1",
-                    "timestamp": "2026-06-09T00:00:00+00:00",
-                },
-                {
-                    "feedback_type": "favorite",
-                    "song_id": "song-2",
-                    "timestamp": "2026-06-09T00:01:00+00:00",
-                    "reward_score": 0.8,
-                },
-            ],
+            updated.artist_preferences, {"Oasis": 0.8, "Blur": 0.6}
         )
+        self.assertEqual(
+            updated.genre_preferences,
+            {"rock": 0.5, "alternative": 0.7},
+        )
+        self.assertEqual(
+            updated.tag_preferences, {"britpop": 0.9, "90s": 0.4}
+        )
+        self.assertEqual(len(updated.feedback_memory), 2)
+
+    def test_replace_requires_complete_profile_data(self) -> None:
+        with self.assertRaises(ValueError):
+            self.service.replace_profile_data(
+                "user-1", {"collection_song_ids": []}
+            )
 
     def test_functional_import_api(self) -> None:
         profile = import_profile_dictionary(
             "user-2",
-            {"short_term_intent": {"languages": ["English"]}},
+            {
+                "collection_song_ids": ["song-10"],
+                "genre_preferences": {"jazz": 0.7},
+            },
             self.root,
         )
 
-        self.assertEqual(
-            profile.short_term_intent["languages"], ["English"]
-        )
+        self.assertEqual(profile.collection_song_ids, ["song-10"])
+        self.assertEqual(profile.genre_preferences, {"jazz": 0.7})
 
     def test_rejects_unsafe_user_id(self) -> None:
         with self.assertRaises(ValueError):
@@ -235,7 +232,7 @@ class ProfileMigrationTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
-    def test_schema_command_prints_framework_without_example_input(self) -> None:
+    def test_schema_command_prints_collection_framework(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [sys.executable, "-m", "rateyourdj.l1.cli", "schema"],
@@ -246,9 +243,10 @@ class CliTests(unittest.TestCase):
         )
         output = json.loads(result.stdout)
 
-        self.assertIn("long_term_preference", output)
-        self.assertIn("short_term_intent", output)
-        self.assertIn("negative_preference", output)
+        self.assertIn("collection_song_ids", output)
+        self.assertIn("artist_preferences", output)
+        self.assertIn("genre_preferences", output)
+        self.assertIn("tag_preferences", output)
         self.assertIn("feedback_memory", output)
 
 

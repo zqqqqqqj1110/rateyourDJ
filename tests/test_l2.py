@@ -6,55 +6,113 @@ import unittest
 from pathlib import Path
 
 from rateyourdj.l2 import (
-    ALIGNED_FEATURE_FIELDS,
+    EXTERNAL_ID_FIELDS,
     METADATA_FIELDS,
+    SOURCE_TAG_FIELDS,
+    GenreNormalizer,
     JsonSongStore,
+    SongDataMerger,
     SongProfile,
     SongProfileService,
     SongValidationError,
+    SourceMatchError,
     empty_song_dict,
     import_song_dictionary,
+    merge_and_store_song,
+    select_preferred_version,
     song_schema,
     validate_song_patch,
 )
 
 
+SPOTIFY_ORIGINAL = {
+    "source": "Spotify",
+    "spotify_track_id": "spotify-original",
+    "title": "Wonderwall",
+    "artists": ["Oasis"],
+    "album": "(What's The Story) Morning Glory?",
+    "release_year": 1995,
+    "duration_ms": 258773,
+}
+
+SPOTIFY_REMASTERED = {
+    **SPOTIFY_ORIGINAL,
+    "spotify_track_id": "spotify-remastered",
+    "title": "Wonderwall - Remastered",
+    "album": "(What's The Story) Morning Glory? (Remastered)",
+}
+
+SPOTIFY_LIVE = {
+    **SPOTIFY_ORIGINAL,
+    "spotify_track_id": "spotify-live",
+    "title": "Wonderwall - Live at Knebworth",
+    "album": "Knebworth 1996",
+}
+
+MUSICBRAINZ_REMASTERED = {
+    "source": "MusicBrainz",
+    "musicbrainz_recording_id": "mb-remastered",
+    "title": "Wonderwall (Remastered)",
+    "artists": ["Oasis"],
+    "album": "(What's The Story) Morning Glory? (Remastered)",
+    "release_year": 1995,
+    "duration_ms": 258700,
+    "score": 100,
+}
+
+LASTFM_TAGS = {
+    "source": "Last.fm",
+    "track": "Wonderwall",
+    "artist": "Oasis",
+    "track_tags": [
+        {"name": "britpop", "count": 100},
+        {"name": "rock", "count": 100},
+        {"name": "90s", "count": 50},
+        {"name": "alternative", "count": 46},
+        {"name": "oasis", "count": 18},
+        {"name": "Love", "count": 1},
+    ],
+    "artist_tags": [
+        {"name": "britpop", "count": 100},
+        {"name": "rock", "count": 84},
+        {"name": "british", "count": 46},
+        {"name": "alternative rock", "count": 38},
+        {"name": "Manchester", "count": 17},
+    ],
+}
+
+
 class SongFrameworkTests(unittest.TestCase):
-    def test_empty_song_contains_complete_l2_framework(self) -> None:
+    def test_empty_song_contains_complete_slim_l2_framework(self) -> None:
         song = empty_song_dict("song-1")
 
+        self.assertEqual(tuple(song["external_ids"]), EXTERNAL_ID_FIELDS)
         self.assertEqual(tuple(song["metadata"]), METADATA_FIELDS)
-        self.assertEqual(
-            tuple(song["aligned_features"]), ALIGNED_FEATURE_FIELDS
-        )
-        self.assertEqual(song["avoid_tags"], {})
-        self.assertEqual(song["semantic_tags"], {})
-        self.assertEqual(song["source_tags"], {})
+        self.assertEqual(tuple(song["source_tags"]), SOURCE_TAG_FIELDS)
+        self.assertEqual(song["genres"], {})
         self.assertEqual(song["data_source"], {})
         self.assertIsNone(song["confidence_score"])
-        self.assertEqual(song["embedding_text"], "")
-        self.assertEqual(song["embedding"], [])
+        self.assertNotIn("moods", song)
+        self.assertNotIn("embedding", song)
 
-    def test_schema_describes_all_l2_sections(self) -> None:
+    def test_schema_describes_only_current_l2_sections(self) -> None:
         schema = song_schema()
 
         self.assertEqual(
             set(schema),
             {
+                "song_id",
+                "external_ids",
                 "metadata",
-                "aligned_features",
-                "avoid_tags",
-                "semantic_tags",
                 "source_tags",
+                "genres",
                 "data_source",
                 "confidence_score",
-                "embedding_text",
-                "embedding",
+                "version",
+                "updated_at",
             },
         )
-        self.assertEqual(
-            set(schema["aligned_features"]), set(ALIGNED_FEATURE_FIELDS)
-        )
+        self.assertIn("version_type", schema["metadata"])
 
     def test_full_song_round_trip(self) -> None:
         original = SongProfile.empty("song-1")
@@ -64,61 +122,37 @@ class SongFrameworkTests(unittest.TestCase):
 
 
 class SongValidationTests(unittest.TestCase):
-    def test_accepts_partial_dictionary_from_collectors(self) -> None:
+    def test_accepts_partial_dictionary(self) -> None:
         patch = validate_song_patch(
             {
+                "external_ids": {"spotify_track_id": "spotify-1"},
                 "metadata": {
                     "title": "Wonderwall",
                     "artist": "Oasis",
-                    "release_year": 1995,
-                    "duration_ms": 258000,
-                    "popularity": 0.9,
+                    "version_type": "remastered",
                 },
-                "aligned_features": {
-                    "genres": {"britpop": 0.9},
-                    "moods": {"nostalgic": 0.8},
-                    "tempo": {"medium": 0.8},
+                "source_tags": {
+                    "lastfm_track_tags": {"britpop": 1.0, "rock": 0.8}
                 },
-                "avoid_tags": {"too_noisy": 0.2},
-                "semantic_tags": {"warm": 0.7},
-                "source_tags": {"lastfm": ["britpop", "rock"]},
-                "data_source": {
-                    "metadata": ["MusicBrainz"],
-                    "genres": ["Last.fm"],
-                },
+                "genres": {"britpop": 1.0},
+                "data_source": {"genres": ["Last.fm", "GenreNormalizer"]},
                 "confidence_score": 0.85,
-                "embedding_text": "A warm Britpop song.",
-                "embedding": [0.1, -0.2, 0.3],
             }
         )
 
-        self.assertEqual(patch["metadata"]["title"], "Wonderwall")
-        self.assertEqual(
-            patch["aligned_features"]["genres"]["britpop"], 0.9
-        )
-        self.assertEqual(patch["embedding"], [0.1, -0.2, 0.3])
+        self.assertEqual(patch["metadata"]["version_type"], "remastered")
+        self.assertEqual(patch["genres"]["britpop"], 1.0)
 
-    def test_rejects_unknown_fields(self) -> None:
-        with self.assertRaises(SongValidationError):
-            validate_song_patch({"unknown_section": {}})
-
-        with self.assertRaises(SongValidationError):
-            validate_song_patch({"metadata": {"unknown_field": "value"}})
-
-        with self.assertRaises(SongValidationError):
-            validate_song_patch(
-                {"aligned_features": {"unknown_field": {}}}
-            )
-
-    def test_rejects_invalid_scores_and_types(self) -> None:
+    def test_rejects_removed_and_invalid_fields(self) -> None:
         invalid_patches = (
+            {"aligned_features": {}},
+            {"metadata": {"popularity": 90}},
             {"metadata": {"duration_ms": -1}},
-            {"metadata": {"release_year": "1995"}},
-            {"metadata": {"popularity": 101}},
-            {"aligned_features": {"genres": {"rock": 1.1}}},
-            {"source_tags": {"lastfm": "rock"}},
+            {"metadata": {"version_type": "studio"}},
+            {"genres": {"rock": 1.1}},
+            {"source_tags": {"lastfm_track_tags": ["rock"]}},
             {"confidence_score": -0.1},
-            {"embedding": [0.1, "invalid"]},
+            {"embedding": [0.1, 0.2]},
         )
 
         for patch in invalid_patches:
@@ -127,74 +161,118 @@ class SongValidationTests(unittest.TestCase):
                     validate_song_patch(patch)
 
 
-class SongMigrationTests(unittest.TestCase):
+class VersionMatchingTests(unittest.TestCase):
+    def test_prefers_remastered_then_original_then_live(self) -> None:
+        selected = select_preferred_version(
+            [SPOTIFY_LIVE, SPOTIFY_ORIGINAL, SPOTIFY_REMASTERED]
+        )
+        self.assertEqual(selected["spotify_track_id"], "spotify-remastered")
+
+        selected_without_remaster = select_preferred_version(
+            [SPOTIFY_LIVE, SPOTIFY_ORIGINAL]
+        )
+        self.assertEqual(
+            selected_without_remaster["spotify_track_id"], "spotify-original"
+        )
+
+    def test_cross_source_metadata_also_uses_version_priority(self) -> None:
+        profile = SongDataMerger().merge(
+            "wonderwall",
+            spotify=SPOTIFY_LIVE,
+            musicbrainz={
+                **MUSICBRAINZ_REMASTERED,
+                "title": "Wonderwall",
+                "album": "(What's The Story) Morning Glory?",
+            },
+        )
+
+        self.assertEqual(profile.metadata["version_type"], "original")
+        self.assertEqual(profile.metadata["title"], "Wonderwall")
+
+
+class GenreNormalizerTests(unittest.TestCase):
+    def test_maps_genres_and_removes_non_genre_tags(self) -> None:
+        genres = GenreNormalizer().normalize(
+            LASTFM_TAGS["track_tags"],
+            LASTFM_TAGS["artist_tags"],
+            artist="Oasis",
+        )
+
+        self.assertEqual(genres["britpop"], 1.0)
+        self.assertEqual(genres["rock"], 1.0)
+        self.assertEqual(genres["alternative_rock"], 0.46)
+        self.assertNotIn("90s", genres)
+        self.assertNotIn("british", genres)
+        self.assertNotIn("oasis", genres)
+        self.assertNotIn("love", genres)
+
+
+class SongMergerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
-        self.store = JsonSongStore(self.root)
-        self.service = SongProfileService(self.store)
+        self.service = SongProfileService(JsonSongStore(self.root))
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
-    def test_init_persists_complete_framework(self) -> None:
-        profile = self.service.get_song_profile("song-1")
-        stored = json.loads(
-            (self.root / "song-1.json").read_text(encoding="utf-8")
+    def test_merges_three_sources_and_persists_profile(self) -> None:
+        profile = self.service.merge_and_save_sources(
+            "wonderwall-oasis",
+            spotify=[SPOTIFY_LIVE, SPOTIFY_ORIGINAL, SPOTIFY_REMASTERED],
+            musicbrainz=[MUSICBRAINZ_REMASTERED],
+            lastfm=LASTFM_TAGS,
         )
+        stored_path = self.root / "wonderwall-oasis.json"
+        stored = json.loads(stored_path.read_text(encoding="utf-8"))
 
+        self.assertTrue(stored_path.exists())
+        self.assertEqual(
+            profile.external_ids["spotify_track_id"], "spotify-remastered"
+        )
+        self.assertEqual(profile.metadata["version_type"], "remastered")
+        self.assertEqual(profile.genres["britpop"], 1.0)
         self.assertEqual(profile.to_dict(), stored)
+        self.assertGreaterEqual(profile.confidence_score, 0.9)
         self.assertEqual(
-            set(stored["aligned_features"]), set(ALIGNED_FEATURE_FIELDS)
+            profile.data_source["external_ids.spotify_track_id"], ["Spotify"]
         )
 
-    def test_import_merges_features_and_replaces_scalar_fields(self) -> None:
-        self.service.import_song_patch(
-            "song-1",
-            {
-                "metadata": {"title": "Wonderwall", "artist": "Oasis"},
-                "aligned_features": {
-                    "genres": {"britpop": 0.9},
-                    "moods": {"warm": 0.6},
-                },
-                "source_tags": {"lastfm": ["britpop"]},
-                "embedding": [0.1, 0.2],
-            },
-        )
-        updated = self.service.import_song_patch(
-            "song-1",
-            {
-                "metadata": {"album": "Morning Glory"},
-                "aligned_features": {
-                    "genres": {"alternative_rock": 0.7}
-                },
-                "source_tags": {"lastfm": ["britpop", "rock"]},
-                "confidence_score": 0.8,
-                "embedding": [0.3, 0.4],
-            },
+    def test_functional_merge_api_writes_requested_directory(self) -> None:
+        profile = merge_and_store_song(
+            "wonderwall",
+            spotify=SPOTIFY_ORIGINAL,
+            lastfm=LASTFM_TAGS,
+            data_dir=self.root,
         )
 
-        self.assertEqual(updated.metadata["title"], "Wonderwall")
-        self.assertEqual(updated.metadata["album"], "Morning Glory")
-        self.assertEqual(
-            updated.aligned_features["genres"],
-            {"britpop": 0.9, "alternative_rock": 0.7},
-        )
-        self.assertEqual(updated.aligned_features["moods"], {"warm": 0.6})
-        self.assertEqual(
-            updated.source_tags["lastfm"], ["britpop", "rock"]
-        )
-        self.assertEqual(updated.confidence_score, 0.8)
-        self.assertEqual(updated.embedding, [0.3, 0.4])
+        self.assertEqual(profile.metadata["title"], "Wonderwall")
+        self.assertTrue((self.root / "wonderwall.json").exists())
 
-    def test_functional_import_api(self) -> None:
+    def test_rejects_cross_source_identity_mismatch(self) -> None:
+        wrong_musicbrainz = {
+            **MUSICBRAINZ_REMASTERED,
+            "title": "Don't Look Back in Anger",
+        }
+        with self.assertRaises(SourceMatchError):
+            SongDataMerger().merge(
+                "wrong",
+                spotify=SPOTIFY_REMASTERED,
+                musicbrainz=wrong_musicbrainz,
+            )
+
+    def test_import_patch_remains_available(self) -> None:
         profile = import_song_dictionary(
             "song-2",
-            {"metadata": {"title": "Song Title"}},
+            {
+                "metadata": {"title": "Song Title", "artist": "Artist"},
+                "genres": {"rock": 0.8},
+            },
             self.root,
         )
 
         self.assertEqual(profile.metadata["title"], "Song Title")
+        self.assertEqual(profile.genres["rock"], 0.8)
 
     def test_rejects_unsafe_song_id(self) -> None:
         with self.assertRaises(ValueError):
@@ -202,7 +280,7 @@ class SongMigrationTests(unittest.TestCase):
 
 
 class L2CliTests(unittest.TestCase):
-    def test_schema_command_prints_framework(self) -> None:
+    def test_schema_command_prints_current_framework(self) -> None:
         project_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             [sys.executable, "-m", "rateyourdj.l2.cli", "schema"],
@@ -213,9 +291,9 @@ class L2CliTests(unittest.TestCase):
         )
         output = json.loads(result.stdout)
 
-        self.assertIn("metadata", output)
-        self.assertIn("aligned_features", output)
-        self.assertIn("embedding", output)
+        self.assertIn("external_ids", output)
+        self.assertIn("genres", output)
+        self.assertNotIn("aligned_features", output)
 
 
 if __name__ == "__main__":

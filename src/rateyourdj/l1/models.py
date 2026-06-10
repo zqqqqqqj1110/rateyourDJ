@@ -6,51 +6,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-LONG_TERM_FIELDS = (
-    "genres",
-    "artists",
-    "languages",
-    "moods",
-    "scenes",
-    "instruments",
-    "vocal_styles",
-    "sound_textures",
-    "tempo_preference",
-    "energy_preference",
+PREFERENCE_FIELDS = (
+    "artist_preferences",
+    "genre_preferences",
+    "tag_preferences",
 )
 
-SHORT_TERM_LIST_FIELDS = (
-    "reference_songs",
-    "reference_artists",
-    "genres",
-    "artists",
-    "languages",
-    "moods",
-    "scenes",
-    "instruments",
-    "vocal_styles",
-    "sound_textures",
-    "tempo_preference",
-    "energy_preference",
-    "must_have",
-    "avoid",
-)
-
-NEGATIVE_FIELDS = (
-    "genres",
-    "artists",
-    "moods",
-    "instruments",
-    "vocal_styles",
-    "sound_textures",
-    "tempo_preference",
-    "energy_preference",
-)
-
-EXPLORATION_LEVELS = ("safe", "balanced", "exploratory")
 FEEDBACK_TYPES = (
     "play",
-    "normal_play",
     "play_complete",
     "skip",
     "quick_skip",
@@ -60,83 +23,64 @@ FEEDBACK_TYPES = (
     "playlist_add",
     "replay",
 )
+
 FEEDBACK_RECORD_FIELDS = (
     "feedback_type",
     "song_id",
-    "query",
     "timestamp",
-    "song_tags",
     "reward_score",
-    "play_duration_ms",
-    "completion_rate",
     "recommendation_context",
 )
+
 TOP_LEVEL_IMPORT_FIELDS = (
+    "collection_song_ids",
+    *PREFERENCE_FIELDS,
+    "feedback_memory",
+)
+
+LEGACY_PROFILE_FIELDS = {
+    "user_id",
     "long_term_preference",
     "short_term_intent",
     "negative_preference",
     "feedback_memory",
-)
+    "version",
+    "updated_at",
+}
 
 
 class ProfileValidationError(ValueError):
-    """Raised when an incoming profile dictionary violates the L1 schema."""
-
-
-def empty_weighted_preferences(
-    fields: tuple[str, ...],
-) -> dict[str, dict[str, float]]:
-    return {name: {} for name in fields}
-
-
-def empty_short_term_intent() -> dict[str, Any]:
-    intent: dict[str, Any] = {
-        name: [] for name in SHORT_TERM_LIST_FIELDS
-    }
-    intent["exploration_level"] = "balanced"
-    return intent
+    """Raised when an incoming user dictionary violates the L1 schema."""
 
 
 def empty_profile_dict(user_id: str) -> dict[str, Any]:
-    """Return the complete, serializable L1 profile framework."""
-    now = datetime.now(timezone.utc).isoformat()
+    """Return the complete, serializable L1 collection profile."""
     return {
         "user_id": user_id,
-        "long_term_preference": empty_weighted_preferences(LONG_TERM_FIELDS),
-        "short_term_intent": empty_short_term_intent(),
-        "negative_preference": empty_weighted_preferences(NEGATIVE_FIELDS),
+        "collection_song_ids": [],
+        "artist_preferences": {},
+        "genre_preferences": {},
+        "tag_preferences": {},
         "feedback_memory": [],
         "version": 1,
-        "updated_at": now,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 def profile_schema() -> dict[str, Any]:
     """Return a machine-readable description of dictionaries accepted by L1."""
     return {
-        "long_term_preference": {
-            field_name: {"<tag>": "number between 0 and 1"}
-            for field_name in LONG_TERM_FIELDS
-        },
-        "short_term_intent": {
-            **{field_name: ["string"] for field_name in SHORT_TERM_LIST_FIELDS},
-            "exploration_level": list(EXPLORATION_LEVELS),
-        },
-        "negative_preference": {
-            field_name: {"<tag>": "number between 0 and 1"}
-            for field_name in NEGATIVE_FIELDS
-        },
+        "collection_song_ids": ["string"],
+        "artist_preferences": {"<artist>": "number between 0 and 1"},
+        "genre_preferences": {"<genre>": "number between 0 and 1"},
+        "tag_preferences": {"<tag>": "number between 0 and 1"},
         "feedback_memory": [
             {
                 "feedback_type": list(FEEDBACK_TYPES),
                 "song_id": "string",
-                "query": "string",
                 "timestamp": "ISO 8601 string",
-                "song_tags": "object supplied by L2/L7",
-                "reward_score": "number supplied by L7",
-                "play_duration_ms": "non-negative integer",
-                "completion_rate": "number between 0 and 1",
-                "recommendation_context": "object supplied by L6/L7",
+                "reward_score": "number supplied by the feedback module",
+                "recommendation_context": "object supplied by later modules",
             }
         ],
     }
@@ -149,40 +93,13 @@ def _require_mapping(value: Any, path: str) -> dict[str, Any]:
 
 
 def _reject_unknown_keys(
-    value: dict[str, Any], allowed: tuple[str, ...], path: str
+    value: dict[str, Any], allowed: tuple[str, ...] | set[str], path: str
 ) -> None:
     unknown = sorted(set(value) - set(allowed))
     if unknown:
         raise ProfileValidationError(
             f"{path} contains unknown fields: {', '.join(unknown)}"
         )
-
-
-def _validate_weighted_section(
-    value: Any, fields: tuple[str, ...], path: str
-) -> dict[str, dict[str, float]]:
-    section = _require_mapping(value, path)
-    _reject_unknown_keys(section, fields, path)
-    validated: dict[str, dict[str, float]] = {}
-    for field_name, weights_value in section.items():
-        weights = _require_mapping(weights_value, f"{path}.{field_name}")
-        validated[field_name] = {}
-        for tag, weight in weights.items():
-            if not isinstance(tag, str) or not tag.strip():
-                raise ProfileValidationError(
-                    f"{path}.{field_name} keys must be non-empty strings"
-                )
-            if isinstance(weight, bool) or not isinstance(weight, (int, float)):
-                raise ProfileValidationError(
-                    f"{path}.{field_name}.{tag} must be a number"
-                )
-            numeric_weight = float(weight)
-            if not 0 <= numeric_weight <= 1:
-                raise ProfileValidationError(
-                    f"{path}.{field_name}.{tag} must be between 0 and 1"
-                )
-            validated[field_name][tag.strip()] = numeric_weight
-    return validated
 
 
 def _validate_string_list(value: Any, path: str) -> list[str]:
@@ -200,15 +117,38 @@ def _validate_string_list(value: Any, path: str) -> list[str]:
     return result
 
 
+def _validate_preferences(value: Any, path: str) -> dict[str, float]:
+    preferences = _require_mapping(value, path)
+    validated: dict[str, float] = {}
+    for label, weight in preferences.items():
+        if not isinstance(label, str) or not label.strip():
+            raise ProfileValidationError(
+                f"{path} keys must be non-empty strings"
+            )
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            raise ProfileValidationError(f"{path}.{label} must be a number")
+        numeric_weight = float(weight)
+        if not 0 <= numeric_weight <= 1:
+            raise ProfileValidationError(
+                f"{path}.{label} must be between 0 and 1"
+            )
+        validated[label.strip()] = numeric_weight
+    return validated
+
+
 def _validate_feedback_record(value: Any, path: str) -> dict[str, Any]:
     record = _require_mapping(value, path)
     _reject_unknown_keys(record, FEEDBACK_RECORD_FIELDS, path)
     validated = deepcopy(record)
 
-    string_fields = ("song_id", "query", "timestamp")
-    for field_name in string_fields:
-        if field_name in record and not isinstance(record[field_name], str):
-            raise ProfileValidationError(f"{path}.{field_name} must be a string")
+    for field_name in ("song_id", "timestamp"):
+        if field_name in record and (
+            not isinstance(record[field_name], str)
+            or not record[field_name].strip()
+        ):
+            raise ProfileValidationError(
+                f"{path}.{field_name} must be a non-empty string"
+            )
 
     if "feedback_type" in record and record["feedback_type"] not in FEEDBACK_TYPES:
         raise ProfileValidationError(
@@ -216,78 +156,37 @@ def _validate_feedback_record(value: Any, path: str) -> dict[str, Any]:
             + ", ".join(FEEDBACK_TYPES)
         )
 
-    for field_name in ("song_tags", "recommendation_context"):
-        if field_name in record and not isinstance(record[field_name], dict):
-            raise ProfileValidationError(f"{path}.{field_name} must be an object")
-
     if "reward_score" in record and (
         isinstance(record["reward_score"], bool)
         or not isinstance(record["reward_score"], (int, float))
     ):
         raise ProfileValidationError(f"{path}.reward_score must be a number")
 
-    if "play_duration_ms" in record and (
-        isinstance(record["play_duration_ms"], bool)
-        or not isinstance(record["play_duration_ms"], int)
-        or record["play_duration_ms"] < 0
+    if "recommendation_context" in record and not isinstance(
+        record["recommendation_context"], dict
     ):
         raise ProfileValidationError(
-            f"{path}.play_duration_ms must be a non-negative integer"
+            f"{path}.recommendation_context must be an object"
         )
-
-    if "completion_rate" in record:
-        completion_rate = record["completion_rate"]
-        if (
-            isinstance(completion_rate, bool)
-            or not isinstance(completion_rate, (int, float))
-            or not 0 <= completion_rate <= 1
-        ):
-            raise ProfileValidationError(
-                f"{path}.completion_rate must be between 0 and 1"
-            )
     return validated
 
 
 def validate_profile_patch(patch: Any) -> dict[str, Any]:
-    """Validate and normalize a partial dictionary supplied by L2/L6/L7."""
+    """Validate a partial dictionary supplied by collection/feedback modules."""
     value = _require_mapping(patch, "profile patch")
     _reject_unknown_keys(value, TOP_LEVEL_IMPORT_FIELDS, "profile patch")
     validated: dict[str, Any] = {}
 
-    if "long_term_preference" in value:
-        validated["long_term_preference"] = _validate_weighted_section(
-            value["long_term_preference"],
-            LONG_TERM_FIELDS,
-            "long_term_preference",
+    if "collection_song_ids" in value:
+        validated["collection_song_ids"] = _validate_string_list(
+            value["collection_song_ids"], "collection_song_ids"
         )
 
-    if "short_term_intent" in value:
-        intent = _require_mapping(
-            value["short_term_intent"], "short_term_intent"
-        )
-        allowed = SHORT_TERM_LIST_FIELDS + ("exploration_level",)
-        _reject_unknown_keys(intent, allowed, "short_term_intent")
-        validated_intent: dict[str, Any] = {}
-        for field_name, field_value in intent.items():
-            if field_name == "exploration_level":
-                if field_value not in EXPLORATION_LEVELS:
-                    raise ProfileValidationError(
-                        "short_term_intent.exploration_level must be one of "
-                        + ", ".join(EXPLORATION_LEVELS)
-                    )
-                validated_intent[field_name] = field_value
-            else:
-                validated_intent[field_name] = _validate_string_list(
-                    field_value, f"short_term_intent.{field_name}"
-                )
-        validated["short_term_intent"] = validated_intent
-
-    if "negative_preference" in value:
-        validated["negative_preference"] = _validate_weighted_section(
-            value["negative_preference"],
-            NEGATIVE_FIELDS,
-            "negative_preference",
-        )
+    for field_name in PREFERENCE_FIELDS:
+        if field_name in value:
+            validated[field_name] = _validate_preferences(
+                value[field_name], field_name
+            )
 
     if "feedback_memory" in value:
         records = value["feedback_memory"]
@@ -297,22 +196,47 @@ def validate_profile_patch(patch: Any) -> dict[str, Any]:
             _validate_feedback_record(record, f"feedback_memory[{index}]")
             for index, record in enumerate(records)
         ]
-
     return validated
+
+
+def migrate_legacy_profile(data: Any) -> dict[str, Any] | None:
+    """Convert the project's previous L1 structure to the collection schema."""
+    value = _require_mapping(data, "profile")
+    if not {
+        "long_term_preference",
+        "short_term_intent",
+        "negative_preference",
+    }.intersection(value):
+        return None
+    _reject_unknown_keys(value, LEGACY_PROFILE_FIELDS, "legacy profile")
+
+    migrated = empty_profile_dict(value.get("user_id", ""))
+    migrated["feedback_memory"] = validate_profile_patch(
+        {"feedback_memory": value.get("feedback_memory", [])}
+    )["feedback_memory"]
+
+    version = value.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise ProfileValidationError(
+            "legacy profile.version must be a positive integer"
+        )
+    migrated["version"] = version + 1
+
+    updated_at = value.get("updated_at")
+    if updated_at is not None and not isinstance(updated_at, str):
+        raise ProfileValidationError(
+            "legacy profile.updated_at must be a string"
+        )
+    return migrated
 
 
 @dataclass(slots=True)
 class UserProfile:
     user_id: str
-    long_term_preference: dict[str, dict[str, float]] = field(
-        default_factory=lambda: empty_weighted_preferences(LONG_TERM_FIELDS)
-    )
-    short_term_intent: dict[str, Any] = field(
-        default_factory=empty_short_term_intent
-    )
-    negative_preference: dict[str, dict[str, float]] = field(
-        default_factory=lambda: empty_weighted_preferences(NEGATIVE_FIELDS)
-    )
+    collection_song_ids: list[str] = field(default_factory=list)
+    artist_preferences: dict[str, float] = field(default_factory=dict)
+    genre_preferences: dict[str, float] = field(default_factory=dict)
+    tag_preferences: dict[str, float] = field(default_factory=dict)
     feedback_memory: list[dict[str, Any]] = field(default_factory=list)
     version: int = 1
     updated_at: str = field(
@@ -322,9 +246,10 @@ class UserProfile:
     def to_dict(self) -> dict[str, Any]:
         return {
             "user_id": self.user_id,
-            "long_term_preference": deepcopy(self.long_term_preference),
-            "short_term_intent": deepcopy(self.short_term_intent),
-            "negative_preference": deepcopy(self.negative_preference),
+            "collection_song_ids": list(self.collection_song_ids),
+            "artist_preferences": deepcopy(self.artist_preferences),
+            "genre_preferences": deepcopy(self.genre_preferences),
+            "tag_preferences": deepcopy(self.tag_preferences),
             "feedback_memory": deepcopy(self.feedback_memory),
             "version": self.version,
             "updated_at": self.updated_at,
@@ -337,12 +262,12 @@ class UserProfile:
     @classmethod
     def from_dict(cls, data: Any) -> UserProfile:
         value = _require_mapping(data, "profile")
+        migrated = migrate_legacy_profile(value)
+        if migrated is not None:
+            value = migrated
         required = {
             "user_id",
-            "long_term_preference",
-            "short_term_intent",
-            "negative_preference",
-            "feedback_memory",
+            *TOP_LEVEL_IMPORT_FIELDS,
             "version",
             "updated_at",
         }
@@ -356,8 +281,10 @@ class UserProfile:
             raise ProfileValidationError(
                 f"profile contains unknown fields: {', '.join(unknown)}"
             )
-        if not isinstance(value["user_id"], str) or not value["user_id"]:
-            raise ProfileValidationError("profile.user_id must be a string")
+        if not isinstance(value["user_id"], str) or not value["user_id"].strip():
+            raise ProfileValidationError(
+                "profile.user_id must be a non-empty string"
+            )
         if (
             isinstance(value["version"], bool)
             or not isinstance(value["version"], int)
@@ -370,22 +297,14 @@ class UserProfile:
             raise ProfileValidationError("profile.updated_at must be a string")
 
         patch = validate_profile_patch(
-            {
-                key: value[key]
-                for key in TOP_LEVEL_IMPORT_FIELDS
-            }
+            {key: value[key] for key in TOP_LEVEL_IMPORT_FIELDS}
         )
-        long_term = empty_weighted_preferences(LONG_TERM_FIELDS)
-        long_term.update(patch["long_term_preference"])
-        short_term = empty_short_term_intent()
-        short_term.update(patch["short_term_intent"])
-        negative = empty_weighted_preferences(NEGATIVE_FIELDS)
-        negative.update(patch["negative_preference"])
         return cls(
-            user_id=value["user_id"],
-            long_term_preference=long_term,
-            short_term_intent=short_term,
-            negative_preference=negative,
+            user_id=value["user_id"].strip(),
+            collection_song_ids=patch["collection_song_ids"],
+            artist_preferences=patch["artist_preferences"],
+            genre_preferences=patch["genre_preferences"],
+            tag_preferences=patch["tag_preferences"],
             feedback_memory=patch["feedback_memory"],
             version=value["version"],
             updated_at=value["updated_at"],

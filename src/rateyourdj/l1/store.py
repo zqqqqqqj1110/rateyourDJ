@@ -36,7 +36,13 @@ class JsonProfileStore:
 
     def load_or_create(self, user_id: str) -> UserProfile:
         if self.exists(user_id):
-            return self.load(user_id)
+            path = self._path_for(user_id)
+            with path.open("r", encoding="utf-8") as file:
+                stored_payload = json.load(file)
+            profile = UserProfile.from_dict(stored_payload)
+            if stored_payload != profile.to_dict():
+                self.save(profile)
+            return profile
         profile = UserProfile(user_id=user_id)
         self.save(profile)
         return profile

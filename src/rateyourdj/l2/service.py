@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from .merger import SongDataMerger, SourceInput
 from .models import SongProfile, validate_song_patch
 from .store import JsonSongStore
 
@@ -25,28 +26,36 @@ class SongProfileService:
         profile = self.get_song_profile(song_id)
         normalized = validate_song_patch(patch)
 
+        profile.external_ids.update(normalized.get("external_ids", {}))
         profile.metadata.update(normalized.get("metadata", {}))
-        for field_name, values in normalized.get(
-            "aligned_features", {}
-        ).items():
-            profile.aligned_features[field_name].update(values)
-        profile.avoid_tags.update(normalized.get("avoid_tags", {}))
-        profile.semantic_tags.update(normalized.get("semantic_tags", {}))
-
-        for section_name in ("source_tags", "data_source"):
-            target = getattr(profile, section_name)
-            for source, values in normalized.get(section_name, {}).items():
-                target[source] = values
-
-        for field_name in (
-            "confidence_score",
-            "embedding_text",
-            "embedding",
-        ):
-            if field_name in normalized:
-                setattr(profile, field_name, normalized[field_name])
+        for field_name, values in normalized.get("source_tags", {}).items():
+            profile.source_tags[field_name] = values
+        profile.genres.update(normalized.get("genres", {}))
+        for field_name, sources in normalized.get("data_source", {}).items():
+            profile.data_source[field_name] = sources
+        if "confidence_score" in normalized:
+            profile.confidence_score = normalized["confidence_score"]
 
         profile.version += 1
-        profile.updated_at = datetime.now(timezone.utc).isoformat()
+        profile.updated_at = datetime.now(timezone.utc).replace(
+            microsecond=0
+        ).isoformat()
+        self.store.save(profile)
+        return profile
+
+    def merge_and_save_sources(
+        self,
+        song_id: str,
+        *,
+        spotify: SourceInput = None,
+        musicbrainz: SourceInput = None,
+        lastfm: SourceInput = None,
+    ) -> SongProfile:
+        profile = SongDataMerger().merge(
+            song_id,
+            spotify=spotify,
+            musicbrainz=musicbrainz,
+            lastfm=lastfm,
+        )
         self.store.save(profile)
         return profile

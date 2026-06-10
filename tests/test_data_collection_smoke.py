@@ -8,6 +8,10 @@ Spotify additionally requires:
 
     SPOTIFY_CLIENT_ID=...
     SPOTIFY_CLIENT_SECRET=...
+
+Last.fm requires:
+
+    LASTFM_API_KEY=...
 """
 
 from __future__ import annotations
@@ -26,8 +30,46 @@ RUN_LIVE_API_TESTS = os.getenv("RUN_LIVE_API_TESTS") == "1"
 MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_URL = "https://api.spotify.com/v1"
+LASTFM_API_URL = "https://ws.audioscrobbler.com/2.0/"
 USER_AGENT = "rateyourDJ/0.1 (L2 metadata collection smoke test)"
 TIMEOUT_SECONDS = 15
+GENRE_TAGS = {
+    "alternative",
+    "alternative rock",
+    "ambient",
+    "blues",
+    "britpop",
+    "classical",
+    "country",
+    "dance",
+    "electronic",
+    "electronica",
+    "experimental",
+    "folk",
+    "funk",
+    "grunge",
+    "hard rock",
+    "heavy metal",
+    "hip hop",
+    "house",
+    "indie",
+    "indie rock",
+    "jazz",
+    "metal",
+    "pop",
+    "pop rock",
+    "post-punk",
+    "progressive rock",
+    "punk",
+    "punk rock",
+    "r&b",
+    "rap",
+    "reggae",
+    "rock",
+    "soul",
+    "techno",
+    "trance",
+}
 
 
 def _request_json(
@@ -165,6 +207,121 @@ def collect_spotify_track(
     }
 
 
+def collect_spotify_audio_features(
+    track_id: str,
+    *,
+    client_id: str,
+    client_secret: str,
+) -> dict[str, Any]:
+    token = _spotify_access_token(client_id, client_secret)
+    payload = _request_json(
+        f"{SPOTIFY_API_URL}/audio-features/{quote(track_id)}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    return {
+        "source": "Spotify Audio Features",
+        "spotify_track_id": payload.get("id", track_id),
+        "tempo_bpm": payload.get("tempo"),
+        "energy": payload.get("energy"),
+        "danceability": payload.get("danceability"),
+        "valence": payload.get("valence"),
+        "acousticness": payload.get("acousticness"),
+        "instrumentalness": payload.get("instrumentalness"),
+        "liveness": payload.get("liveness"),
+        "speechiness": payload.get("speechiness"),
+        "loudness_db": payload.get("loudness"),
+        "key": payload.get("key"),
+        "mode": payload.get("mode"),
+        "time_signature": payload.get("time_signature"),
+        "duration_ms": payload.get("duration_ms"),
+    }
+
+
+def _lastfm_top_tags(
+    method: str,
+    *,
+    api_key: str,
+    artist: str,
+    track: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    params = {
+        "method": method,
+        "api_key": api_key,
+        "artist": artist,
+        "autocorrect": 1,
+        "format": "json",
+    }
+    if track is not None:
+        params["track"] = track
+    payload = _request_json(f"{LASTFM_API_URL}?{urlencode(params)}")
+    if "error" in payload:
+        raise RuntimeError(
+            f"Last.fm error {payload['error']}: {payload.get('message', '')}"
+        )
+
+    tags = payload.get("toptags", {}).get("tag", [])
+    if isinstance(tags, dict):
+        tags = [tags]
+    parsed: list[dict[str, Any]] = []
+    for item in tags[:limit]:
+        name = str(item.get("name", "")).strip()
+        if not name:
+            continue
+        raw_count = item.get("count", 0)
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            count = 0
+        parsed.append({"name": name, "count": count})
+    return parsed
+
+
+def _normalize_tag_scores(tags: list[dict[str, Any]]) -> dict[str, float]:
+    maximum = max((item["count"] for item in tags), default=0)
+    if maximum <= 0:
+        return {item["name"]: 0.0 for item in tags}
+    return {
+        item["name"]: round(item["count"] / maximum, 4)
+        for item in tags
+    }
+
+
+def collect_lastfm_tags(
+    title: str,
+    artist: str,
+    *,
+    api_key: str,
+    limit: int = 20,
+) -> dict[str, Any]:
+    track_tags = _lastfm_top_tags(
+        "track.getTopTags",
+        api_key=api_key,
+        artist=artist,
+        track=title,
+        limit=limit,
+    )
+    artist_tags = _lastfm_top_tags(
+        "artist.getTopTags",
+        api_key=api_key,
+        artist=artist,
+        limit=limit,
+    )
+    combined_names = {
+        item["name"].casefold()
+        for item in track_tags + artist_tags
+    }
+    return {
+        "source": "Last.fm",
+        "track": title,
+        "artist": artist,
+        "track_tags": track_tags,
+        "artist_tags": artist_tags,
+        "normalized_track_tags": _normalize_tag_scores(track_tags),
+        "candidate_genres": sorted(combined_names & GENRE_TAGS),
+    }
+
+
 @unittest.skipUnless(
     RUN_LIVE_API_TESTS,
     "set RUN_LIVE_API_TESTS=1 to call external APIs",
@@ -202,6 +359,56 @@ class SpotifyCollectionSmokeTest(unittest.TestCase):
         self.assertTrue(result["spotify_track_id"])
         self.assertIn("Wonderwall", result["title"])
         self.assertIn("Oasis", result["artists"])
+
+
+@unittest.skipUnless(
+    RUN_LIVE_API_TESTS
+    and bool(os.getenv("SPOTIFY_CLIENT_ID"))
+    and bool(os.getenv("SPOTIFY_CLIENT_SECRET")),
+    "set RUN_LIVE_API_TESTS=1 and Spotify client credentials",
+)
+class SpotifyAudioFeaturesSmokeTest(unittest.TestCase):
+    def test_collect_wonderwall_audio_features(self) -> None:
+        client_id = os.environ["SPOTIFY_CLIENT_ID"]
+        client_secret = os.environ["SPOTIFY_CLIENT_SECRET"]
+        track = collect_spotify_track(
+            "Wonderwall",
+            "Oasis",
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        result = collect_spotify_audio_features(
+            track["spotify_track_id"],
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        print("\nSpotify Audio Features result:")
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+        self.assertEqual(result["source"], "Spotify Audio Features")
+        self.assertTrue(result["spotify_track_id"])
+        self.assertIsInstance(result["tempo_bpm"], (int, float))
+        self.assertIsInstance(result["energy"], (int, float))
+
+
+@unittest.skipUnless(
+    RUN_LIVE_API_TESTS and bool(os.getenv("LASTFM_API_KEY")),
+    "set RUN_LIVE_API_TESTS=1 and LASTFM_API_KEY",
+)
+class LastfmCollectionSmokeTest(unittest.TestCase):
+    def test_collect_wonderwall_tags(self) -> None:
+        result = collect_lastfm_tags(
+            "Wonderwall",
+            "Oasis",
+            api_key=os.environ["LASTFM_API_KEY"],
+        )
+        print("\nLast.fm result:")
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+
+        self.assertEqual(result["source"], "Last.fm")
+        self.assertTrue(result["track_tags"])
+        self.assertTrue(result["artist_tags"])
+        self.assertTrue(result["candidate_genres"])
 
 
 if __name__ == "__main__":

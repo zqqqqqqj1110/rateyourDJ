@@ -1,340 +1,318 @@
 # rateyourDJ
 
-本项目旨在构建一个个性化音乐推荐 Agent，通过用户画像建模、音乐知识库构建和工具调用机制，实现基于用户需求的歌曲检索、排序、推荐与反馈更新；在系统积累交互数据后，进一步利用 SFT 和 GRPO 优化 Agent 的工具调用能力与推荐决策能力。
+本项目当前目标是：读取用户收藏歌单，为收藏歌曲建立 metadata、tags 和 genres 画像，并推荐尚未收藏的相似歌曲。
 
 ## 1. 总体流程
 
 ```
-用户输入需求
+读取用户收藏歌单
     ↓
-Agent 理解用户意图
-		↓
-读取用户画像
-		↓
-从音乐知识库检索候选歌曲
-		↓
-对候选歌曲排序
-		↓
-返回推荐结果和推荐理由
-		↓
-收集用户反馈
-		↓
-更新用户画像和推荐权重
-		↓
-积累交互轨迹
-		↓
-后期 SFT / GRPO 优化 Agent
-		↓
-	验证
-		↓
-	前端
+获取 Spotify / MusicBrainz metadata
+    ↓
+获取 Last.fm track tags / artist tags
+    ↓
+Genre Normalizer 生成标准 genres
+    ↓
+建立收藏歌曲画像
+    ↓
+召回候选歌曲
+    ↓
+计算歌曲相似度并过滤已收藏歌曲
+    ↓
+返回推荐结果
+    ↓
+收集反馈并优化后续排序
 ```
 
-## 1. L1 用户画像模块
+## 1. L1 用户收藏画像模块
 
-把用户的自然语言、播放记录、收藏记录、反馈记录转成结构化画像。
+当前目标不是通用的自然语言场景推荐，而是：
 
-| 字段                | 所属部分                                                     | 主要来源                                     | 获取方式                              | 可靠性   | 用途                                                     |
-| ------------------- | ------------------------------------------------------------ | -------------------------------------------- | ------------------------------------- | -------- | -------------------------------------------------------- |
-| genres              | Long-term Preference / Short-term Intent                     | Last.fm、MusicBrainz、人工标签、用户 query   | API / tag mapping / LLM 抽取          | 较高     | 用于候选歌曲召回、风格匹配和排序                         |
-| artists             | Long-term Preference / Short-term Intent                     | Spotify、MusicBrainz、播放记录、用户 query   | API / metadata / LLM 抽取             | 很高     | 用于歌手偏好建模、相似歌手推荐                           |
-| reference_songs     | Short-term Intent                                            | 用户 query、播放记录、收藏记录               | LLM 抽取 / metadata 匹配              | 高       | 用于“推荐类似某首歌”的相似歌曲检索                       |
-| reference_artists   | Short-term Intent                                            | 用户 query、播放记录、收藏记录               | LLM 抽取 / metadata 匹配              | 高       | 用于“推荐类似某个歌手”的风格迁移推荐                     |
-| languages           | Long-term Preference / Short-term Intent                     | 用户 query、歌曲 metadata、歌词语言检测、LLM | API / LLM / langdetect                | 中等     | 用于语言过滤和语言偏好排序                               |
-| moods               | Long-term Preference / Short-term Intent                     | Last.fm tags、评论、用户 query、LLM          | tag mapping / LLM 抽取                | 中等     | 用于情绪推荐，例如怀旧、温暖、安静、忧郁                 |
-| scenes              | Long-term Preference / Short-term Intent                     | 用户 query、用户行为上下文、评论、LLM        | LLM 抽取 / 行为上下文推断             | 中等     | 用于场景推荐，例如学习、夜晚、通勤、运动                 |
-| instruments         | Long-term Preference / Short-term Intent                     | 用户描述、评论、标签、可选音频分析           | LLM 抽取 / tag mapping / 可选音频分析 | 中等     | 用于乐器偏好匹配，例如吉他、钢琴、合成器                 |
-| vocal_styles        | Long-term Preference / Short-term Intent                     | 用户描述、评论、LLM                          | LLM 抽取 / 人工标签                   | 中等偏低 | 用于细粒度听感匹配和推荐解释，例如人声靠前、温柔女声     |
-| sound_textures      | Long-term Preference / Short-term Intent / Negative Preference | 评论、Last.fm tags、用户 query、LLM          | LLM 抽取 / tag mapping                | 中等     | 用于主观听感匹配，例如 warm、dreamy、noisy、lo-fi        |
-| tempo_preference    | Long-term Preference / Short-term Intent / Negative Preference | 用户描述、标签、评论语义、可选音频特征       | tag mapping / LLM 抽取 / 可选音频分析 | 中等     | 用于节奏偏好控制，例如 slow、medium、fast                |
-| energy_preference   | Long-term Preference / Short-term Intent / Negative Preference | 用户描述、标签、评论语义、可选音频特征       | tag mapping / LLM 抽取 / 可选音频分析 | 中等     | 用于能量强度控制，例如 low、medium、high                 |
-| must_have           | Short-term Intent                                            | 用户当前 query                               | LLM 抽取                              | 高       | 表示本次推荐必须满足的条件，例如英文歌、有人声、有吉他   |
-| avoid               | Short-term Intent / Negative Preference                      | 用户当前 query、明确负反馈                   | LLM 抽取 / 行为反馈                   | 高       | 表示本次推荐需要规避的条件，例如不要太吵、不要电子感太强 |
-| exploration_level   | Short-term Intent                                            | 用户 query、系统默认设置、历史反馈           | LLM 判断 / 规则设定                   | 中等     | 控制推荐新颖度，例如 safe、balanced、exploratory         |
-| negative_preference | Negative Preference                                          | 用户明确反馈、快速跳过、dislike、连续负反馈  | LLM 抽取 / 行为反馈聚合               | 高       | 用于推荐过滤和排序惩罚                                   |
-| feedback_memory     | Feedback Memory                                              | 用户行为日志                                 | 系统自己记录                          | 很高     | 用于画像更新、推荐评估、后期 SFT / GRPO 数据积累         |
+> 根据用户收藏歌单中的歌曲，推荐风格和标签相似的新歌曲。
 
-将其保存为json文件，结构如下所示
+因此 L1 只保存用户收藏歌曲集合，以及由收藏歌曲聚合得到的偏好。
 
-```
+| 字段 | 类型 | 来源 | 当前状态 | 用途 |
+| --- | --- | --- | --- | --- |
+| user_id | string | 系统 | 已有框架 | 用户唯一标识 |
+| collection_song_ids | string[] | Spotify 收藏歌曲或歌单 | **必要，待采集** | 作为相似推荐的种子歌曲集合 |
+| artist_preferences | `{artist: weight}` | 收藏歌曲 metadata 聚合 | **必要，待实现** | 表示用户收藏歌手分布 |
+| genre_preferences | `{genre: weight}` | 收藏歌曲 genres 聚合 | **必要，依赖 Genre Normalizer** | 表示用户收藏流派分布 |
+| tag_preferences | `{tag: weight}` | 收藏歌曲 Last.fm tags 聚合 | **必要，待实现** | 表示用户收藏歌曲的社区标签分布 |
+| feedback_memory | object[] | 后续推荐反馈 | 已有存储框架，当前不参与首次推荐 | 后续根据喜欢、收藏、跳过调整推荐 |
+| version | integer | 系统 | 已有框架 | 画像版本 |
+| updated_at | string | 系统 | 已有框架 | 更新时间 |
+
+目标 JSON 结构：
+
+```json
 {
-  "long_term_preference": {},
-  "short_term_intent": {},
-  "negative_preference": {},
-  "feedback_memory": []
+  "user_id": "demo-user",
+  "collection_song_ids": [],
+  "artist_preferences": {},
+  "genre_preferences": {},
+  "tag_preferences": {},
+  "feedback_memory": [],
+  "version": 1,
+  "updated_at": ""
 }
 ```
 
-其中，long_term如下，用于个性化召回，长期排序权重，用户稳定音乐品味建模
+说明：
 
-```
-genres
-artists
-languages
-moods
-scenes
-instruments
-vocal_styles
-sound_textures
-tempo_preference
-energy_preference
-```
+- `collection_song_ids` 是 L1 最重要的原始输入。
+- 三类 preference 不由 L1 自己推断，而是由收藏歌曲的 L2 画像聚合后迁入。
+- 当前 L1 代码已按本表同步。
 
-Short_team如下，用于理解用户本次想听什么，控制本轮推荐方向，优先满足当前需求
+### L1 实现状态
 
-```
-reference_songs
-reference_artists
-genres
-artists
-languages
-moods
-scenes
-instruments
-vocal_styles
-sound_textures
-tempo_preference
-energy_preference
-must_have
-avoid
-exploration_level
-```
+| 能力 | 状态 |
+| --- | --- |
+| JSON 校验、迁入、合并和持久化 | 已实现 |
+| 新版收藏画像字段 | 已同步到代码 |
+| Spotify 收藏歌单采集 | 待实现 |
+| 从收藏歌曲聚合 artist / genre / tag preferences | 待实现 |
 
-negative_preference如下,推荐过滤,排序惩罚,避免重复推荐用户不喜欢的内容
+## L2 歌曲相似度画像模块
 
-```
-不喜欢的 genres
-不喜欢的 artists
-不喜欢的 moods
-不喜欢的 instruments
-不喜欢的 vocal_styles
-不喜欢的 sound_textures
-不喜欢的 tempo / energy
-```
+L2 保存计算歌曲相似度所需的 metadata、Last.fm 原始标签和标准化 genres。
 
-feedback_memory如下，实时更新用户画像, 计算个性化 reward, 评估推荐效果, 后期构造 SFT / GRPO 训练数据
+| 字段 | 类型 | 来源 | 当前状态 | 用途 |
+| --- | --- | --- | --- | --- |
+| song_id | string | 系统 | 已有框架 | 项目内部歌曲唯一标识 |
+| spotify_track_id | string/null | Spotify | **已验证可采集** | Spotify 查询和歌单关联 |
+| musicbrainz_recording_id | string/null | MusicBrainz | **已验证可采集** | MusicBrainz 查询和跨平台匹配 |
+| title | string | Spotify、MusicBrainz | **已验证可采集** | 歌名匹配和展示 |
+| artist | string | Spotify、MusicBrainz | **已验证可采集** | 歌手匹配和相似度特征 |
+| album | string | Spotify、MusicBrainz | **已验证可采集** | 版本识别和展示 |
+| release_year | integer/null | Spotify、MusicBrainz | **已验证可采集** | 发行年代相似度 |
+| duration_ms | integer/null | Spotify、MusicBrainz | **已验证可采集** | 版本匹配和辅助校验 |
+| version_type | string/null | 系统识别 | **已实现** | 标记 `remastered`、`original`、`live`、`cover` 或 `unknown` |
+| track_tags | `{tag: weight}` | Last.fm `track.getTopTags` | **已验证可采集** | 最重要的歌曲级相似度特征 |
+| artist_tags | `{tag: weight}` | Last.fm `artist.getTopTags` | **已验证可采集** | 歌曲标签不足时的补充特征 |
+| genres | `{genre: weight}` | Last.fm tags 清洗分类 | **已实现** | 标准化流派相似度 |
+| data_source | object | 系统记录 | **已实现** | 记录各字段来源 |
+| confidence_score | number/null | 系统计算 | **已实现** | 表示跨源匹配、metadata 完整度和标签结果可信度 |
+| version | integer | 系统 | 已有框架 | 歌曲画像版本 |
+| updated_at | string | 系统 | 已有框架 | 更新时间 |
 
-```
-播放
-完整播放
-快速跳过
-收藏
-喜欢
-不喜欢
-加入歌单
-重复播放
-当前 query
-时间戳
-对应歌曲标签
-reward 分数
-```
+目标 JSON 结构：
 
-### L1 当前实现
-
-L1 当前只负责用户画像的数据边界，不负责理解自然语言或计算反馈奖励。后续模块将整理好的字典迁入 L1，由 L1 完成校验、合并和持久化。
-
-职责包括：
-
-- 提供包含全部 L1 字段的空画像框架。
-- 校验后续模块传入的部分画像字典。
-- 合并长期偏好和负向偏好的标签权重。
-- 覆盖本轮传入的短期意图字段。
-- 追加 L7 生成的反馈记录。
-- 按用户读取和保存 JSON。
-
-不属于 L1 的职责：
-
-- 自然语言意图抽取由 L6 或独立解析工具负责。
-- 歌曲标签和元数据由 L2 提供。
-- reward 计算以及如何更新偏好权重由 L7 决定。
-
-本地查看完整框架：
-
-```bash
-conda activate rateyourDJ
-python -m pip install -e .
-rateyourdj-l1 schema
-rateyourdj-l1 init demo-user
-rateyourdj-l1 show demo-user
-```
-
-`init` 会直接生成完整的空画像，不需要传入 example。默认保存在 `data/user_profiles/<user_id>.json`。
-
-后续模块需要迁入字典时：
-
-```bash
-rateyourdj-l1 validate path/to/profile_patch.json
-rateyourdj-l1 import demo-user path/to/profile_patch.json
-```
-
-运行测试：
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-## L2 音乐知识库模块
-
-与L1字段对齐，方便计算匹配度
-
-需要对齐的字段：
-
-| L2 字段           | 对齐的 L1 字段                                | 主要来源                            | 获取方式                         | 可靠性   | 用途                                         |
-| ----------------- | --------------------------------------------- | ----------------------------------- | -------------------------------- | -------- | -------------------------------------------- |
-| genres            | genres                                        | Last.fm、MusicBrainz、人工标签      | API / tag mapping                | 较高     | 风格匹配、候选召回、排序                     |
-| artists           | artists / reference_artists                   | Spotify、MusicBrainz、歌曲 metadata | API / metadata                   | 很高     | 歌手偏好匹配、相似歌手推荐                   |
-| title / song_name | reference_songs                               | Spotify、MusicBrainz、歌曲 metadata | API / metadata                   | 很高     | 支持“类似某首歌”的推荐                       |
-| languages         | languages                                     | 歌曲 metadata、歌词语言检测、LLM    | metadata / langdetect / LLM      | 中等     | 语言过滤、语言偏好匹配                       |
-| moods             | moods                                         | Last.fm tags、评论、LLM             | tag mapping / LLM 抽取           | 中等     | 情绪匹配，例如 nostalgic、calm、melancholic  |
-| scenes            | scenes                                        | 评论、用户标签、LLM、人工规则       | LLM 抽取 / 规则映射              | 中等偏低 | 场景匹配，例如 night、study、walking         |
-| instruments       | instruments                                   | 评论、标签、LLM、可选音频分析       | tag mapping / LLM 抽取           | 中等     | 乐器偏好匹配，例如 acoustic_guitar、piano    |
-| vocal_styles      | vocal_styles                                  | 评论、LLM、人工标签                 | LLM 抽取 / 人工标注              | 中等偏低 | 人声偏好匹配，例如 forward_vocal、soft_vocal |
-| sound_textures    | sound_textures                                | Last.fm tags、评论、LLM             | tag mapping / LLM 抽取           | 中等     | 听感匹配，例如 warm、dreamy、noisy、lo_fi    |
-| tempo             | tempo_preference                              | 用户标签、评论语义、可选 BPM        | tag mapping / LLM / 可选音频分析 | 中等     | 节奏匹配，例如 slow、medium、fast            |
-| energy            | energy_preference                             | 用户标签、评论语义、可选音频特征    | tag mapping / LLM / 可选音频分析 | 中等     | 能量匹配，例如 low、medium、high             |
-| avoid_tags        | avoid / negative_preference                   | 歌曲标签、评论、LLM                 | tag mapping / LLM 抽取           | 中等     | 用于过滤或惩罚用户不想要的特征               |
-| semantic_tags     | moods / scenes / sound_textures / instruments | Last.fm、评论、LLM                  | 统一标签映射                     | 中等     | 作为统一语义标签池，辅助召回和排序           |
-| embedding_text    | 所有 L1 文本偏好字段                          | metadata + tags + LLM summary       | 模板生成 / LLM 总结              | 中等     | 生成歌曲 embedding，用于语义检索             |
-| embedding         | 用户 query embedding / reference_songs        | embedding model                     | 文本向量化                       | 中等     | 相似歌曲检索、语义召回                       |
-
-辅助字段
-
-| L2 辅助字段      | 来源                       | 用途                               |
-| ---------------- | -------------------------- | ---------------------------------- |
-| song_id          | 系统生成 / API ID          | 唯一标识歌曲                       |
-| album            | Spotify、MusicBrainz       | 展示和元数据补充                   |
-| release_year     | Spotify、MusicBrainz       | 年代偏好、推荐解释                 |
-| duration_ms      | Spotify、metadata          | 展示和过滤                         |
-| popularity       | Spotify、Last.fm           | 排序辅助，避免推荐太冷门或质量过低 |
-| source_tags      | Last.fm、MusicBrainz、评论 | 保留原始标签，方便追溯             |
-| data_source      | API / 人工 / LLM           | 标记字段来源，方便判断可信度       |
-| confidence_score | 系统计算                   | 判断该歌曲特征是否可靠             |
-
-例子：
-
-```
+```json
 {
-  "song_id": "song_001",
-
+  "song_id": "song-001",
+  "external_ids": {
+    "spotify_track_id": null,
+    "musicbrainz_recording_id": null
+  },
   "metadata": {
-    "title": "Wonderwall",
-    "artist": "Oasis",
-    "album": "(What's the Story) Morning Glory?",
-    "release_year": 1995,
-    "language": "English",
-    "duration_ms": 258000
+    "title": "",
+    "artist": "",
+    "album": "",
+    "release_year": null,
+    "duration_ms": null,
+    "version_type": null
   },
-
-  "aligned_features": {
-    "genres": {
-      "britpop": 0.9,
-      "alternative_rock": 0.7
-    },
-    "artists": {
-      "Oasis": 1.0
-    },
-    "languages": {
-      "English": 1.0
-    },
-    "moods": {
-      "nostalgic": 0.8,
-      "warm": 0.7,
-      "melancholic": 0.5
-    },
-    "scenes": {
-      "night": 0.6,
-      "walking": 0.5,
-      "alone": 0.5
-    },
-    "instruments": {
-      "acoustic_guitar": 0.9,
-      "electric_guitar": 0.4
-    },
-    "vocal_styles": {
-      "forward_vocal": 0.7,
-      "male_vocal": 0.8
-    },
-    "sound_textures": {
-      "guitar_driven": 0.9,
-      "warm": 0.6,
-      "anthemic": 0.7
-    },
-    "tempo": {
-      "medium": 0.8
-    },
-    "energy": {
-      "medium": 0.7
-    }
-  },
-
-  "avoid_tags": {
-    "too_noisy": 0.2,
-    "too_fast": 0.1,
-    "too_electronic": 0.0
-  },
-
   "source_tags": {
-    "lastfm_tags": ["britpop", "rock", "alternative", "90s", "acoustic"],
-    "review_keywords": ["guitar-driven", "nostalgic", "anthemic"]
+    "lastfm_track_tags": {},
+    "lastfm_artist_tags": {}
   },
-
-  "embedding_text": "Wonderwall by Oasis is a Britpop and alternative rock song with acoustic guitar, forward male vocal, nostalgic and warm mood, and a guitar-driven anthemic sound texture.",
-  "embedding": []
+  "genres": {},
+  "data_source": {},
+  "confidence_score": null,
+  "version": 1,
+  "updated_at": ""
 }
 ```
 
-### L2 当前实现
+数据处理流程：
 
-L2 当前只负责歌曲画像的数据边界，不负责调用外部 API、推断标签或生成 embedding。
+```text
+Spotify + MusicBrainz metadata
+        ↓
+歌曲版本匹配：重制版 > 原版 > 现场版/翻唱版
+        ↓
+Last.fm track tags + artist tags
+        ↓
+原始标签保存到 source_tags
+        ↓
+Genre Normalizer 清洗、分类、加权
+        ↓
+生成 genres
+        ↓
+计算 confidence_score
+        ↓
+写入 data/song_profiles/<song_id>.json
+```
 
-职责包括：
+说明：
 
-- 提供包含全部 L2 字段的空歌曲画像框架。
-- 校验采集器、标准化模块或 enrichment 模块传入的部分字典。
-- 合并 metadata、对齐特征、标签、来源和 embedding 数据。
-- 按 `song_id` 读取和保存 JSON。
+- 当前 Spotify、MusicBrainz 和 Last.fm 都已通过单曲 smoke test。
+- L2 schema、跨源匹配、Genre Normalizer、三源合并、置信度计算和 JSON 落盘已实现。
+- 正式批量采集器不属于本阶段范围；当前合并器接收采集结果字典或候选字典列表。
+- `confidence_score` 衡量当前歌曲画像的数据质量，不是 L3 的歌曲相似度分数。
 
-查看完整 schema 和创建空歌曲画像：
+三源 JSON 合并并写入存储：
 
 ```bash
-conda activate rateyourDJ
+rateyourdj-l2 merge-sources wonderwall-oasis \
+  --spotify spotify.json \
+  --musicbrainz musicbrainz.json \
+  --lastfm lastfm.json
+```
+
+输出文件：
+
+```text
+data/song_profiles/wonderwall-oasis.json
+```
+
+### L2 实现状态
+
+| 能力 | 状态 |
+| --- | --- |
+| JSON 校验、迁入、合并和持久化 | 已实现 |
+| Spotify metadata 单曲采集 | 已通过 smoke test |
+| MusicBrainz metadata 单曲采集 | 已通过 smoke test |
+| Last.fm track tags / artist tags 单曲采集 | 已通过 smoke test |
+| 精简后的歌曲相似度 schema | 已实现 |
+| 重制版 > 原版 > 现场版/翻唱版匹配 | 已实现 |
+| Genre Normalizer | 已实现 |
+| 三源数据合并 | 已实现 |
+| 置信度计算 | 已实现 |
+| 合并结果写入 L2 store | 已实现 |
+| 《The Wall》正式批量采集器 | 已实现 |
+
+### 《The Wall》本地数据集
+
+项目提供正式批量采集命令，按专辑标准曲序采集 Pink Floyd 的
+`The Wall` 共 26 首歌曲。原始输入清单中的重复曲目会被去重，并补全
+`Another Brick in the Wall, Part 2` 和 `Part 3`。
+
+先配置三个数据源：
+
+```bash
+export SPOTIFY_CLIENT_ID="..."
+export SPOTIFY_CLIENT_SECRET="..."
+export LASTFM_API_KEY="..."
+```
+
+重新安装命令入口并开始采集：
+
+```bash
 python -m pip install -e .
-rateyourdj-l2 schema
-rateyourdj-l2 init song-001
-rateyourdj-l2 show song-001
+rateyourdj-collect album pink-floyd-the-wall --user-id demo-user
 ```
 
-`init` 生成的文件位于 `data/song_profiles/song-001.json`，不需要传入 example。
+当前支持的专辑 key：
 
-后续数据采集模块迁入字典时：
+```text
+frank-sinatra-in-the-wee-small-hours
+sly-and-the-family-stone-theres-a-riot-goin-on
+elvis-costello-this-years-model-expanded
+bob-dylan-1963
+the-who-tommy
+creedence-clearwater-revival-green-river
+elton-john-goodbye-yellow-brick-road-expanded
+pink-floyd-the-wall
+```
+
+第一批 8 张专辑、共 145 首：
 
 ```bash
-rateyourdj-l2 validate path/to/song_patch.json
-rateyourdj-l2 import song-001 path/to/song_patch.json
+rateyourdj-collect album batch-1 --user-id demo-user
 ```
 
-当前所有权重、`popularity` 和 `confidence_score` 均统一归一化到 `0` 至 `1`。
+第二批 10 张专辑、共 139 首：
+
+```bash
+rateyourdj-collect album batch-2 --user-id demo-user
+```
+
+目前 `all` 会采集全部 18 张专辑、共 284 首。
+
+例如：
+
+```bash
+rateyourdj-collect album frank-sinatra-in-the-wee-small-hours --user-id demo-user
+rateyourdj-collect album sly-and-the-family-stone-theres-a-riot-goin-on --user-id demo-user
+rateyourdj-collect album elvis-costello-this-years-model-expanded --user-id demo-user
+rateyourdj-collect album bob-dylan-1963 --user-id demo-user
+rateyourdj-collect album the-who-tommy --user-id demo-user
+rateyourdj-collect album creedence-clearwater-revival-green-river --user-id demo-user
+rateyourdj-collect album elton-john-goodbye-yellow-brick-road-expanded --user-id demo-user
+```
+
+采集结果：
+
+```text
+data/song_profiles/pink-floyd-the-wall-01-in-the-flesh-question.json
+...
+data/song_profiles/pink-floyd-the-wall-26-outside-the-wall.json
+data/user_profiles/demo-user.json
+```
+
+批量任务会采集 Spotify metadata、MusicBrainz metadata 和 Last.fm tags，
+调用 L2 完成版本匹配、genre 标准化、置信度计算与落盘，随后更新 L1 的
+`collection_song_ids` 及 artist、genre、tag preferences。
 
 
 
-## L3 候选歌曲召回模块
+## L3 相似歌曲召回模块
 
-目的是寻找n个在L1需求下的L2候选歌曲，最终输出候选歌曲列表
+L3 从用户收藏歌曲出发寻找相似歌曲，并排除用户已经收藏的歌曲。
 
-通过n种召回策略
+### 输入字段
 
-| 召回方式                 | 输入                                    | 使用字段                                                     | 输出                 | 适合场景                     |
-| ------------------------ | --------------------------------------- | ------------------------------------------------------------ | -------------------- | ---------------------------- |
-| Keyword Retrieval        | 用户 query                              | title、artist、genres、tags                                  | 关键词匹配候选       | 用户直接说歌名、歌手、风格   |
-| Tag-based Retrieval      | L1 short-term intent                    | genres、moods、scenes、instruments、sound_textures           | 标签匹配候选         | 用户说“安静、晚上、吉他”     |
-| Embedding Retrieval      | query embedding                         | song embedding                                               | 语义相似候选         | 用户表达比较模糊             |
-| Reference Song Retrieval | reference_songs                         | song embedding、aligned_features                             | 相似歌曲候选         | 用户说“像 Wonderwall”        |
-| User Profile Retrieval   | long-term preference                    | genres、artists、languages、moods、scenes、instruments、vocal_styles、sound_textures、tempo、energy | 个性化候选           | 用户只说“推荐点我可能喜欢的” |
-| Rule-based Filter        | must_have / avoid / negative_preference | language、avoid_tags、negative_preference、explicit constraints | 过滤或降权不合适歌曲 | 用户有明确限制条件           |
+| 字段 | 来源 | 当前状态 | 用途 |
+| --- | --- | --- | --- |
+| collection_song_ids | L1 | **必要，待采集** | 相似推荐种子集合 |
+| seed_song_profiles | L2 | **必要，待正式落盘** | 收藏歌曲的 metadata、tags 和 genres |
+| candidate_song_profiles | L2 | **必要，待建立候选库** | 被比较的候选歌曲画像 |
 
-其中，Rule-based Filter 不直接产生候选歌曲，而是在多路召回前后用于过滤或惩罚不满足 must_have / avoid 条件的歌曲。
+### 召回与过滤
+
+| 步骤 | 使用字段 | 当前状态 | 说明 |
+| --- | --- | --- | --- |
+| Similar Track Retrieval | Last.fm similar tracks 或候选歌曲库 | **必要，待实现** | 为每首收藏歌曲召回候选 |
+| Track Tag Similarity | track_tags | **必要，待实现** | 第一版主要相似度信号 |
+| Genre Similarity | genres | **必要，依赖 Genre Normalizer** | 比较标准化流派 |
+| Artist Tag Similarity | artist_tags | **必要，待实现** | 作为歌曲级标签的补充 |
+| Artist Similarity | artist | **必要，待实现** | 同歌手可加分，但应避免结果被同一歌手占满 |
+| Release Era Similarity | release_year | 可选，已能采集 | 小权重比较发行年代 |
+| Collection Filter | song_id / external IDs | **必要，待实现** | 排除用户已经收藏的歌曲 |
+| Duplicate Version Filter | title、artist、duration_ms | **必要，待实现** | 合并原版、重制版和现场版等重复结果 |
+
+第一版相似度建议：
+
+```text
+Similarity =
+0.55 * TrackTagSimilarity
++ 0.25 * GenreSimilarity
++ 0.15 * ArtistTagSimilarity
++ 0.05 * ReleaseEraSimilarity
+```
+
+输出字段：
+
+```json
+{
+  "candidate_song_id": "song-002",
+  "seed_song_ids": ["song-001"],
+  "similarity_score": 0.82,
+  "score_breakdown": {
+    "track_tags": 0.48,
+    "genres": 0.21,
+    "artist_tags": 0.10,
+    "release_year": 0.03
+  },
+  "retrieval_sources": ["lastfm_similar_tracks"]
+}
+```
 
 ## L4 推荐排序
+
+> 注意：L4 及后续章节仍保留早期通用推荐 Agent 设计，尚未按当前“收藏歌单相似歌曲推荐”目标同步。
 
 根据用户当前意图、长期偏好、负向偏好和候选歌曲特征，对 L3 输出的候选歌曲进行精细打分和排序，最终输出 Top-K 推荐歌曲。
 
@@ -667,5 +645,3 @@ Agent Metrics：
 ## L10 前端（如果有）
 
 我问一个然后ai给我一段推荐的理由，和歌曲的试听，试听可选择加入到我的歌单，跳过等选择，账号独享奖励函数
-
-

@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .models import UserProfile, validate_profile_patch
+from .models import PREFERENCE_FIELDS, UserProfile, validate_profile_patch
 from .store import JsonProfileStore
 
 
 class UserProfileService:
-    """Owns L1 dictionary validation, merge semantics and persistence."""
+    """Owns L1 collection-profile validation, merging and persistence."""
 
     def __init__(self, store: JsonProfileStore) -> None:
         self.store = store
@@ -25,17 +25,12 @@ class UserProfileService:
         profile = self.get_user_profile(user_id)
         normalized = validate_profile_patch(patch)
 
-        for section_name in (
-            "long_term_preference",
-            "negative_preference",
-        ):
-            for field_name, values in normalized.get(section_name, {}).items():
-                getattr(profile, section_name)[field_name].update(values)
+        for song_id in normalized.get("collection_song_ids", []):
+            if song_id not in profile.collection_song_ids:
+                profile.collection_song_ids.append(song_id)
 
-        for field_name, value in normalized.get(
-            "short_term_intent", {}
-        ).items():
-            profile.short_term_intent[field_name] = value
+        for field_name in PREFERENCE_FIELDS:
+            getattr(profile, field_name).update(normalized.get(field_name, {}))
 
         profile.feedback_memory.extend(
             normalized.get("feedback_memory", [])
@@ -45,36 +40,35 @@ class UserProfileService:
         self.store.save(profile)
         return profile
 
-    def replace_profile_sections(
+    def replace_profile_data(
         self, user_id: str, profile_data: dict[str, Any]
     ) -> UserProfile:
-        """Replace all four L1 sections while preserving profile metadata."""
+        """Replace all L1 data fields while preserving profile identity."""
         normalized = validate_profile_patch(profile_data)
-        required = {
-            "long_term_preference",
-            "short_term_intent",
-            "negative_preference",
-            "feedback_memory",
-        }
-        missing = sorted(required - set(normalized))
+        missing = sorted(set(self._required_patch_fields()) - set(normalized))
         if missing:
             raise ValueError(
-                "replacement is missing sections: " + ", ".join(missing)
+                "replacement is missing fields: " + ", ".join(missing)
             )
 
-        profile = self.get_user_profile(user_id)
-        replacement = UserProfile.empty(user_id)
-        replacement.long_term_preference.update(
-            normalized["long_term_preference"]
+        existing = self.get_user_profile(user_id)
+        replacement = UserProfile(
+            user_id=user_id,
+            collection_song_ids=normalized["collection_song_ids"],
+            artist_preferences=normalized["artist_preferences"],
+            genre_preferences=normalized["genre_preferences"],
+            tag_preferences=normalized["tag_preferences"],
+            feedback_memory=normalized["feedback_memory"],
+            version=existing.version + 1,
+            updated_at=datetime.now(timezone.utc).isoformat(),
         )
-        replacement.short_term_intent.update(
-            normalized["short_term_intent"]
-        )
-        replacement.negative_preference.update(
-            normalized["negative_preference"]
-        )
-        replacement.feedback_memory = normalized["feedback_memory"]
-        replacement.version = profile.version + 1
-        replacement.updated_at = datetime.now(timezone.utc).isoformat()
         self.store.save(replacement)
         return replacement
+
+    @staticmethod
+    def _required_patch_fields() -> tuple[str, ...]:
+        return (
+            "collection_song_ids",
+            *PREFERENCE_FIELDS,
+            "feedback_memory",
+        )

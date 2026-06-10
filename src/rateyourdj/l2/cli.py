@@ -44,6 +44,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     import_command.add_argument("song_id")
     import_command.add_argument("json_file", type=Path)
+
+    merge = subparsers.add_parser(
+        "merge-sources",
+        help="merge Spotify, MusicBrainz and Last.fm JSON and store the profile",
+    )
+    merge.add_argument("song_id")
+    merge.add_argument("--spotify", type=Path)
+    merge.add_argument("--musicbrainz", type=Path)
+    merge.add_argument("--lastfm", type=Path)
     return parser
 
 
@@ -64,6 +73,18 @@ def main() -> None:
         _print_json(
             service.import_song_patch(
                 args.song_id, _load_json(args.json_file)
+            ).to_dict()
+        )
+        return
+    if args.command == "merge-sources":
+        _print_json(
+            service.merge_and_save_sources(
+                args.song_id,
+                spotify=_load_json(args.spotify) if args.spotify else None,
+                musicbrainz=(
+                    _load_json(args.musicbrainz) if args.musicbrainz else None
+                ),
+                lastfm=_load_json(args.lastfm) if args.lastfm else None,
             ).to_dict()
         )
 
