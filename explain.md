@@ -339,8 +339,8 @@ L3 是本地相似歌曲召回模块。它从 L1 读取用户收藏的
 `collection_song_ids`，从 L2 加载这些种子歌曲及候选歌曲画像，然后返回
 相似歌曲。
 
-L3 当前只负责召回，不负责最终推荐排序。L4 后续可以结合用户偏好、反馈和
-当前需求重新排序 L3 的候选结果。
+L3 当前只负责召回，不负责最终推荐排序。已实现的 L4 会结合 L1 收藏偏好、
+L2 画像质量和列表多样性重新排序 L3 候选。
 
 数据流：
 
@@ -583,3 +583,114 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | 候选大多来自同一专辑 | 同歌手、同年代和标签高度相似；可降低 `max-per-artist` |
 | 低分候选的 `track_tags` 为 0 | 它只通过 genres、artist tags 或年代产生弱匹配 |
 | `rateyourdj-l3` 命令不存在 | 重新运行 `python -m pip install -e . --no-build-isolation` |
+
+# L4
+
+## L4 是什么
+
+L4 是偏好感知的推荐排序模块。L3 负责找出与收藏歌曲相似的候选，L4 再读取
+L1 的 artist、genre、tag 偏好和 L2 的画像质量，把较大的候选池重排为最终
+Top-K。
+
+当前 L4 只使用已经稳定存在的数据字段，不使用旧设计中的 short-term
+intent、negative preference、mood、scene 或 embedding。
+
+数据流：
+
+```text
+L3 扩大候选池
+      |
+      v
+L1 artist / genre / tag 偏好匹配
+      |
+      v
+L2 confidence_score 质量加权
+      |
+      v
+与已选歌曲计算重复度
+      |
+      v
+输出多样化 Top-K
+```
+
+## L4 分数
+
+基础分：
+
+```text
+BaseScore =
+0.50 * L3Similarity
++ 0.08 * ArtistPreference
++ 0.14 * GenrePreference
++ 0.18 * TagPreference
++ 0.10 * ProfileQuality
+```
+
+genre 和 tag 使用带权 Jaccard 匹配。artist 在忽略大小写和多余空格后精确
+匹配。`ProfileQuality` 使用 L2 `confidence_score`，缺失值按 0 处理。
+
+为了避免最终列表充满高度相似的歌曲，L4 每次从剩余候选中选择歌曲时，都会
+与已经选中的歌曲比较：
+
+```text
+DiversitySimilarity =
+0.20 * SameArtist
++ 0.40 * GenreSimilarity
++ 0.40 * TagSimilarity
+
+FinalScore =
+max(0, BaseScore - 0.15 * MaxDiversitySimilarity)
+```
+
+因此第一首歌曲没有多样性惩罚，后续歌曲如果与前面结果的 artist、genres
+或 tags 高度重复，排名会下降。
+
+## 运行 L4
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l4.cli rank demo-user --top-k 20
+```
+
+指定候选池、歌手上限和 L3 最低分：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l4.cli rank demo-user \
+  --top-k 20 \
+  --candidate-pool-size 100 \
+  --max-per-artist 2 \
+  --min-retrieval-score 0.05
+```
+
+默认候选池大小是 `top_k * 5`。候选池必须不小于最终 `top_k`。
+
+查看 schema：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l4.cli schema
+```
+
+## L4 输出
+
+每首结果包括：
+
+| 字段 | 含义 |
+| --- | --- |
+| `rank` | 最终名次 |
+| `song_id` | L2 song ID |
+| `title` / `artist` | L2 展示字段 |
+| `base_score` | 五项基础贡献之和 |
+| `score_breakdown` | L3、三类偏好和质量的加权贡献 |
+| `diversity_penalty` | 与更高排名歌曲重复产生的惩罚 |
+| `final_score` | `base_score - diversity_penalty` |
+| `ranking_reasons` | 可读的主要排序原因 |
+| `best_seed_song_id` | L3 中与该候选最匹配的收藏歌曲 |
+| `retrieval_sources` | L3 候选来源 |
+
+结果顶层还会保留 `seed_song_ids`、`missing_seed_song_ids` 和
+`missing_candidate_song_ids`，方便定位数据缺口。
+
+运行 L4 测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_l4 -v
+```

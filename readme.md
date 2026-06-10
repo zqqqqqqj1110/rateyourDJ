@@ -35,10 +35,10 @@ Genre Normalizer 生成标准 genres
 | 字段 | 类型 | 来源 | 当前状态 | 用途 |
 | --- | --- | --- | --- | --- |
 | user_id | string | 系统 | 已有框架 | 用户唯一标识 |
-| collection_song_ids | string[] | Spotify 收藏歌曲或歌单 | **必要，待采集** | 作为相似推荐的种子歌曲集合 |
-| artist_preferences | `{artist: weight}` | 收藏歌曲 metadata 聚合 | **必要，待实现** | 表示用户收藏歌手分布 |
-| genre_preferences | `{genre: weight}` | 收藏歌曲 genres 聚合 | **必要，依赖 Genre Normalizer** | 表示用户收藏流派分布 |
-| tag_preferences | `{tag: weight}` | 收藏歌曲 Last.fm tags 聚合 | **必要，待实现** | 表示用户收藏歌曲的社区标签分布 |
+| collection_song_ids | string[] | 专辑采集或后续 Spotify 收藏导入 | **已支持写入，Spotify 收藏导入待接入** | 作为相似推荐的种子歌曲集合 |
+| artist_preferences | `{artist: weight}` | 收藏歌曲 metadata 聚合 | **已实现** | 表示用户收藏歌手分布 |
+| genre_preferences | `{genre: weight}` | 收藏歌曲 genres 聚合 | **已实现** | 表示用户收藏流派分布 |
+| tag_preferences | `{tag: weight}` | 收藏歌曲 Last.fm tags 聚合 | **已实现** | 表示用户收藏歌曲的社区标签分布 |
 | feedback_memory | object[] | 后续推荐反馈 | 已有存储框架，当前不参与首次推荐 | 后续根据喜欢、收藏、跳过调整推荐 |
 | version | integer | 系统 | 已有框架 | 画像版本 |
 | updated_at | string | 系统 | 已有框架 | 更新时间 |
@@ -71,7 +71,7 @@ Genre Normalizer 生成标准 genres
 | JSON 校验、迁入、合并和持久化 | 已实现 |
 | 新版收藏画像字段 | 已同步到代码 |
 | Spotify 收藏歌单采集 | 待实现 |
-| 从收藏歌曲聚合 artist / genre / tag preferences | 待实现 |
+| 从收藏歌曲聚合 artist / genre / tag preferences | 已实现 |
 
 ## L2 歌曲相似度画像模块
 
@@ -293,22 +293,23 @@ rateyourdj-l3 schema
 
 | 字段 | 来源 | 当前状态 | 用途 |
 | --- | --- | --- | --- |
-| collection_song_ids | L1 | **必要，待采集** | 相似推荐种子集合 |
-| seed_song_profiles | L2 | **必要，待正式落盘** | 收藏歌曲的 metadata、tags 和 genres |
-| candidate_song_profiles | L2 | **必要，待建立候选库** | 被比较的候选歌曲画像 |
+| collection_song_ids | L1 | **已支持** | 相似推荐种子集合 |
+| seed_song_profiles | L2 | **已支持** | 收藏歌曲的 metadata、tags 和 genres |
+| candidate_song_profiles | L2 | **已支持本地候选库** | 被比较的候选歌曲画像 |
 
 ### 召回与过滤
 
 | 步骤 | 使用字段 | 当前状态 | 说明 |
 | --- | --- | --- | --- |
-| Similar Track Retrieval | Last.fm similar tracks 或候选歌曲库 | **必要，待实现** | 为每首收藏歌曲召回候选 |
-| Track Tag Similarity | track_tags | **必要，待实现** | 第一版主要相似度信号 |
-| Genre Similarity | genres | **必要，依赖 Genre Normalizer** | 比较标准化流派 |
-| Artist Tag Similarity | artist_tags | **必要，待实现** | 作为歌曲级标签的补充 |
-| Artist Similarity | artist | **必要，待实现** | 同歌手可加分，但应避免结果被同一歌手占满 |
+| Similar Track Retrieval | 本地候选歌曲库 | **已实现** | 扫描本地 L2 候选 |
+| Track Tag Similarity | track_tags | **已实现** | 第一版主要相似度信号 |
+| Genre Similarity | genres | **已实现** | 比较标准化流派 |
+| Artist Tag Similarity | artist_tags | **已实现** | 作为歌曲级标签的补充 |
+| Artist Limit | artist | **已实现** | 避免结果被同一歌手占满 |
 | Release Era Similarity | release_year | 可选，已能采集 | 小权重比较发行年代 |
-| Collection Filter | song_id / external IDs | **必要，待实现** | 排除用户已经收藏的歌曲 |
-| Duplicate Version Filter | title、artist、duration_ms | **必要，待实现** | 合并原版、重制版和现场版等重复结果 |
+| Collection Filter | song_id / external IDs | **已实现** | 排除用户已经收藏的歌曲 |
+| Duplicate Version Filter | title、artist、duration_ms | **已实现** | 合并原版、重制版和现场版等重复结果 |
+| Last.fm Similar Tracks | 在线 API | 待实现 | 扩展本地候选库以外的召回 |
 
 第一版相似度建议：
 
@@ -354,70 +355,77 @@ Similarity =
 
 ## L4 推荐排序
 
-> 注意：L4 及后续章节仍保留早期通用推荐 Agent 设计，尚未按当前“收藏歌单相似歌曲推荐”目标同步。
+L4 消费现有 L1、L2 和 L3 数据，不依赖当前 schema 中不存在的 short-term
+intent 或 negative preference。它先让 L3 返回一个较大的候选池，再根据用户
+收藏偏好、歌曲画像质量和列表多样性重排为最终 Top-K。
 
-根据用户当前意图、长期偏好、负向偏好和候选歌曲特征，对 L3 输出的候选歌曲进行精细打分和排序，最终输出 Top-K 推荐歌曲。
+### L4 实现状态
 
-输入：
+- 已实现 L3 候选池自动召回。
+- 已实现 artist、genre 和 tag 三类 L1 偏好匹配。
+- 已实现 L2 `confidence_score` 质量分。
+- 已实现基于 artist、genres 和 tags 的贪心多样性重排。
+- 已实现每位歌手数量限制、Top-K 和最低 L3 分数参数。
+- 已实现完整分数拆解、排序原因和缺失候选记录。
+- feedback 调权和当前自然语言需求不属于本版 L4，后续在字段契约明确后接入。
 
-1. L3结果
-2. L1的short-term intent
-3. L1的long-term performance
-4. L2的song profile
+基础分：
 
-输出例子：
-
-```
-{
-  "ranked_songs": [
-    {
-      "rank": 1,
-      "song_id": "song_018",
-      "title": "Half the World Away",
-      "artist": "Oasis",
-      "final_score": 0.89,
-      "score_breakdown": {
-        "short_term_match": 0.31,
-        "long_term_match": 0.22,
-        "retrieval_score": 0.12,
-        "quality_score": 0.08,
-        "diversity_score": 0.06,
-        "penalty": -0.02
-      },
-      "ranking_reason": [
-        "matches the reference song style",
-        "English vocal",
-        "acoustic guitar",
-        "nostalgic and warm mood",
-        "not too noisy"
-      ]
-    }
-  ]
-}
+```text
+BaseScore =
+0.50 * L3Similarity
++ 0.08 * ArtistPreference
++ 0.14 * GenrePreference
++ 0.18 * TagPreference
++ 0.10 * ProfileQuality
 ```
 
-其中，
+其中 genre 和 tag 偏好使用带权 Jaccard；artist 使用标准化后的精确匹配；
+`ProfileQuality` 直接使用 L2 `confidence_score`，缺失时按 0 计算。
 
-```
-Final Score =
-0.35 * ShortTermMatch
-+ 0.25 * LongTermMatch
-+ 0.15 * RetrievalScore
-+ 0.10 * QualityScore
-+ 0.10 * DiversityScore
-- 0.25 * NegativePenalty
-- 0.20 * ConstraintPenalty
+L4 按贪心方式逐首选择歌曲。每次选择时，候选会与已进入结果的歌曲比较，
+使用 artist、genres 和 tags 计算最高重复度：
+
+```text
+DiversitySimilarity =
+0.20 * SameArtist
++ 0.40 * GenreSimilarity
++ 0.40 * TagSimilarity
+
+FinalScore =
+max(0, BaseScore - 0.15 * MaxDiversitySimilarity)
 ```
 
-| 排序因子          | 来源                                      | 使用字段                                                     | 作用                           | 权重建议（暂时） |
-| ----------------- | ----------------------------------------- | ------------------------------------------------------------ | ------------------------------ | ---------------- |
-| ShortTermMatch    | L1 Short-term Intent + L2 Song Profile    | language、mood、scene、instrument、sound_texture、tempo、energy、must_have、avoid | 判断是否符合本次需求           | 0.35             |
-| LongTermMatch     | L1 Long-term Preference + L2 Song Profile | genres、artists、moods、scenes、instruments、vocal_styles、sound_textures | 判断是否符合长期偏好           | 0.25             |
-| RetrievalScore    | L3 Candidate Retrieval                    | retrieval_score、retrieval_sources                           | 保留召回阶段相关性             | 0.15             |
-| QualityScore      | L2 Metadata / Source Tags                 | popularity、metadata completeness、tag confidence            | 避免推荐低质量或信息不可靠歌曲 | 0.10             |
-| DiversityScore    | L4 当前推荐列表                           | artist、genre、embedding similarity                          | 避免推荐结果过于重复           | 0.10             |
-| NegativePenalty   | L1 Negative Preference + L2 avoid_tags    | negative_preference、avoid_tags                              | 惩罚用户长期不喜欢的特征       | -0.25            |
-| ConstraintPenalty | L1 Short-term Intent + L2 Song Profile    | must_have、avoid、language、energy、tempo                    | 惩罚或过滤违反当前限制的歌曲   | -0.20            |
+运行排序：
+
+```bash
+rateyourdj-l4 rank demo-user --top-k 20
+```
+
+未安装命令入口时：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l4.cli rank demo-user --top-k 20
+```
+
+显式设置候选池和歌手上限：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l4.cli rank demo-user \
+  --top-k 20 \
+  --candidate-pool-size 100 \
+  --max-per-artist 2 \
+  --min-retrieval-score 0.05
+```
+
+默认候选池大小为 `top_k * 5`。查看输出 schema：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l4.cli schema
+```
+
+输出中的 `score_breakdown` 五项相加等于 `base_score`；
+`final_score` 等于基础分减去当前列表产生的 `diversity_penalty`。
 
 
 
@@ -428,10 +436,10 @@ Final Score =
 | 工具名称             | 对应模块     | 输入                                             | 输出                                      | 作用               |
 | -------------------- | ------------ | ------------------------------------------------ | ----------------------------------------- | ------------------ |
 | parse_user_intent    | L6 / 解析工具 | user_query                                       | short_term_intent                         | 解析用户当前需求   |
-| get_user_profile     | L1           | user_id                                          | long_term_preference、negative_preference | 获取用户长期画像   |
+| get_user_profile     | L1           | user_id                                          | collection_song_ids、artist/genre/tag preferences | 获取用户收藏画像   |
 | search_song_metadata | L2           | title / artist / query                           | song profile                              | 查询歌曲信息       |
-| retrieve_candidates  | L3           | short_term_intent、user_profile                  | candidate_songs                           | 召回候选歌曲       |
-| rank_candidates      | L4           | candidate_songs、user_profile、short_term_intent | ranked_songs                              | 对候选歌曲排序     |
+| retrieve_candidates  | L3           | user_id、top_k、过滤参数                         | candidate_songs                           | 召回候选歌曲       |
+| rank_candidates      | L4           | user_id、top_k、候选池与多样性参数               | ranked_songs                              | 对候选歌曲排序     |
 | play_song            | 外部音乐 API | song_id                                          | playback_url / playback_status            | 播放或返回播放链接 |
 | collect_feedback     | L7           | user_id、song_id、feedback_type                  | feedback_record                           | 记录用户反馈       |
 | import_profile_dictionary | L1      | L6 / L7 生成的画像字典                           | updated_user_profile                      | 校验、合并并保存画像 |
