@@ -24,6 +24,7 @@ from .tools import (
     get_song_profile,
     get_song_schema,
     import_song_dictionary,
+    inspect_song_profile,
     merge_and_store_song,
     validate_song_dictionary,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "get_song_profile",
     "get_song_schema",
     "import_song_dictionary",
+    "inspect_song_profile",
     "merge_and_store_song",
     "classify_version",
     "select_preferred_version",

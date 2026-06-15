@@ -22,26 +22,33 @@ class UserProfileService:
     def import_profile_patch(
         self, user_id: str, patch: dict[str, Any]
     ) -> UserProfile:
-        profile = self.get_user_profile(user_id)
         normalized = validate_profile_patch(patch)
 
-        for song_id in normalized.get("collection_song_ids", []):
-            if song_id not in profile.collection_song_ids:
-                profile.collection_song_ids.append(song_id)
+        def update(profile: UserProfile) -> UserProfile:
+            for song_id in normalized.get("collection_song_ids", []):
+                if song_id not in profile.collection_song_ids:
+                    profile.collection_song_ids.append(song_id)
 
-        for field_name in PREFERENCE_FIELDS:
-            getattr(profile, field_name).update(normalized.get(field_name, {}))
+            for field_name in PREFERENCE_FIELDS:
+                getattr(profile, field_name).update(
+                    normalized.get(field_name, {})
+                )
 
-        profile.feedback_memory.extend(
-            normalized.get("feedback_memory", [])
-        )
-        profile.version += 1
-        profile.updated_at = datetime.now(timezone.utc).isoformat()
-        self.store.save(profile)
-        return profile
+            profile.feedback_memory.extend(
+                normalized.get("feedback_memory", [])
+            )
+            profile.version += 1
+            profile.updated_at = datetime.now(timezone.utc).isoformat()
+            return profile
+
+        return self.store.update(user_id, update)
 
     def replace_profile_data(
-        self, user_id: str, profile_data: dict[str, Any]
+        self,
+        user_id: str,
+        profile_data: dict[str, Any],
+        *,
+        preserve_feedback: bool = False,
     ) -> UserProfile:
         """Replace all L1 data fields while preserving profile identity."""
         normalized = validate_profile_patch(profile_data)
@@ -51,19 +58,23 @@ class UserProfileService:
                 "replacement is missing fields: " + ", ".join(missing)
             )
 
-        existing = self.get_user_profile(user_id)
-        replacement = UserProfile(
-            user_id=user_id,
-            collection_song_ids=normalized["collection_song_ids"],
-            artist_preferences=normalized["artist_preferences"],
-            genre_preferences=normalized["genre_preferences"],
-            tag_preferences=normalized["tag_preferences"],
-            feedback_memory=normalized["feedback_memory"],
-            version=existing.version + 1,
-            updated_at=datetime.now(timezone.utc).isoformat(),
-        )
-        self.store.save(replacement)
-        return replacement
+        def replace(existing: UserProfile) -> UserProfile:
+            return UserProfile(
+                user_id=user_id,
+                collection_song_ids=normalized["collection_song_ids"],
+                artist_preferences=normalized["artist_preferences"],
+                genre_preferences=normalized["genre_preferences"],
+                tag_preferences=normalized["tag_preferences"],
+                feedback_memory=(
+                    list(existing.feedback_memory)
+                    if preserve_feedback
+                    else normalized["feedback_memory"]
+                ),
+                version=existing.version + 1,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+        return self.store.update(user_id, replace)
 
     @staticmethod
     def _required_patch_fields() -> tuple[str, ...]:

@@ -18,7 +18,7 @@
           <small>local recommendation studio</small>
         </span>
       </a>
-      <div class="status-pill"><span></span> L1-L5 online</div>
+      <div class="status-pill"><span></span> L1-L6 online</div>
     </header>
 
     <main>
@@ -101,6 +101,25 @@
           <p id="collection-meta">等待载入收藏</p>
         </div>
         <div id="collection" class="collection-grid"></div>
+      </section>
+
+      <section class="agent-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">L6 RECOMMENDATION AGENT</p>
+            <h2>告诉 DJ 你现在想听什么</h2>
+          </div>
+          <p id="agent-meta">自然语言请求会保存为 trajectory</p>
+        </div>
+        <form id="agent-form" class="agent-form">
+          <input
+            id="agent-query"
+            autocomplete="off"
+            placeholder="例如：推荐 5 首多样一点的摇滚，不要“Pink Floyd”"
+          >
+          <button type="submit" class="primary-button">问 DJ</button>
+        </form>
+        <p id="agent-response" class="agent-response hidden"></p>
       </section>
 
       <section class="recommendations-section">

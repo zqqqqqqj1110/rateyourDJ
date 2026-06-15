@@ -261,6 +261,7 @@ def rebuild_user_profile(
             "tag_preferences": _normalize_totals(tag_totals),
             "feedback_memory": existing.feedback_memory,
         },
+        preserve_feedback=True,
     )
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from rateyourdj.l1 import JsonProfileStore, UserProfile
 from rateyourdj.l2 import JsonSongStore, SongProfile
+from rateyourdj.l6 import JsonTrajectoryStore
 from rateyourdj.web import create_app
 
 
@@ -36,6 +37,8 @@ class WebAppTests(unittest.TestCase):
         root = Path(self.temporary_directory.name)
         self.profile_dir = root / "profiles"
         self.song_dir = root / "songs"
+        self.trajectory_dir = root / "trajectories"
+        self.session_dir = root / "sessions"
         profile_store = JsonProfileStore(self.profile_dir)
         song_store = JsonSongStore(self.song_dir)
         profile_store.save(
@@ -49,9 +52,12 @@ class WebAppTests(unittest.TestCase):
         )
         song_store.save(make_song("seed", artist="Seed Artist", tag="rock"))
         song_store.save(make_song("candidate", artist="Other Artist", tag="rock"))
+        song_store.save(make_song("candidate-2", artist="Third Artist", tag="rock"))
         app = create_app(
             profile_dir=self.profile_dir,
             song_dir=self.song_dir,
+            trajectory_dir=self.trajectory_dir,
+            session_dir=self.session_dir,
         )
         app.config.update(TESTING=True)
         self.client = app.test_client()
@@ -78,6 +84,19 @@ class WebAppTests(unittest.TestCase):
             "candidate",
         )
 
+    def test_agent_status_reports_provider_configuration(self) -> None:
+        response = self.client.get("/api/agent-status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {
+                "configured_agent_mode": "auto",
+                "provider": None,
+                "model_enabled": False,
+            },
+        )
+
     def test_feedback_endpoint_updates_l5_summary(self) -> None:
         response = self.client.post(
             "/api/feedback/user-1",
@@ -93,6 +112,90 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.get_json()["reward_score"], 0.6)
         self.assertEqual(summary.get_json()["positive_events"], 1)
 
+    def test_chat_endpoint_runs_l6_and_saves_trajectory(self) -> None:
+        response = self.client.post(
+            "/api/chat/user-1",
+            json={"query": "推荐一首摇滚"},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        self.assertEqual(payload["parsed_request"]["top_k"], 1)
+        self.assertEqual(payload["ranked_songs"][0]["song_id"], "candidate")
+        self.assertEqual(payload["seed_song_ids"], ["seed"])
+        self.assertEqual(payload["stop_reason"], "goal_satisfied")
+        self.assertTrue(payload["session_id"])
+        self.assertTrue(
+            (
+                self.trajectory_dir
+                / "user-1"
+                / f"{payload['trajectory_id']}.json"
+            ).exists()
+        )
+        feedback = self.client.post(
+            "/api/feedback/user-1",
+            json={
+                "song_id": "candidate",
+                "feedback_type": "like",
+                "recommendation_context": {
+                    "trajectory_id": payload["trajectory_id"],
+                    "rank": 1,
+                },
+            },
+        )
+        self.assertEqual(feedback.status_code, 201)
+        stored = JsonProfileStore(self.profile_dir).load("user-1")
+        self.assertEqual(
+            stored.feedback_memory[-1]["recommendation_context"][
+                "trajectory_id"
+            ],
+            payload["trajectory_id"],
+        )
+        trajectory = JsonTrajectoryStore(self.trajectory_dir).load(
+            "user-1",
+            payload["trajectory_id"],
+        )
+        self.assertEqual(len(trajectory.feedback_events), 1)
+        self.assertEqual(
+            trajectory.feedback_events[0]["reward_score"],
+            0.6,
+        )
+
+    def test_chat_session_supports_more_without_repeating_songs(self) -> None:
+        first = self.client.post(
+            "/api/chat/user-1",
+            json={"query": "推荐一首摇滚"},
+        ).get_json()
+        second = self.client.post(
+            "/api/chat/user-1",
+            json={
+                "query": "换一批",
+                "default_top_k": 1,
+                "session_id": first["session_id"],
+            },
+        ).get_json()
+
+        self.assertEqual(second["session_id"], first["session_id"])
+        self.assertNotEqual(
+            second["ranked_songs"][0]["song_id"],
+            first["ranked_songs"][0]["song_id"],
+        )
+
+    def test_chat_model_mode_without_provider_degrades_to_rules(self) -> None:
+        response = self.client.post(
+            "/api/chat/user-1",
+            json={
+                "query": "推荐一首摇滚",
+                "agent_mode": "model",
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        self.assertEqual(payload["agent_mode"], "rules")
+        self.assertIn("no LLM provider", payload["fallback_reason"])
+        self.assertEqual(payload["ranked_songs"][0]["song_id"], "candidate")
+
     def test_collection_endpoint_marks_feedback_favorites(self) -> None:
         before = self.client.get("/api/collection/user-1")
         response = self.client.post(
@@ -105,6 +208,8 @@ class WebAppTests(unittest.TestCase):
         after = self.client.get("/api/collection/user-1")
 
         self.assertEqual(before.get_json()["total"], 1)
+        self.assertEqual(before.get_json()["collection_count"], 1)
+        self.assertEqual(before.get_json()["missing_song_ids"], [])
         self.assertEqual(response.status_code, 201)
         self.assertEqual(after.status_code, 200)
         self.assertEqual(after.get_json()["total"], 2)
@@ -118,6 +223,38 @@ class WebAppTests(unittest.TestCase):
                 "genres": ["rock"],
                 "added_via_feedback": True,
             },
+        )
+
+    def test_feedback_rejects_unknown_trajectory_before_writing_l1(self) -> None:
+        response = self.client.post(
+            "/api/feedback/user-1",
+            json={
+                "song_id": "candidate",
+                "feedback_type": "like",
+                "recommendation_context": {
+                    "trajectory_id": "missing-trajectory",
+                },
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        profile = JsonProfileStore(self.profile_dir).load("user-1")
+        self.assertEqual(profile.feedback_memory, [])
+
+    def test_collection_endpoint_reports_missing_song_profiles(self) -> None:
+        profile_store = JsonProfileStore(self.profile_dir)
+        profile = profile_store.load("user-1")
+        profile.collection_song_ids.append("missing-song")
+        profile_store.save(profile)
+
+        response = self.client.get("/api/collection/user-1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["collection_count"], 2)
+        self.assertEqual(response.get_json()["total"], 1)
+        self.assertEqual(
+            response.get_json()["missing_song_ids"],
+            ["missing-song"],
         )
 
     def test_api_returns_json_errors(self) -> None:

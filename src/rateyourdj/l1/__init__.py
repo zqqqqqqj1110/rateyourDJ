@@ -16,6 +16,7 @@ from .tools import (
     get_profile_schema,
     get_user_profile,
     import_profile_dictionary,
+    inspect_user_profile,
     validate_profile_dictionary,
 )
 
@@ -32,6 +33,7 @@ __all__ = [
     "get_profile_schema",
     "get_user_profile",
     "import_profile_dictionary",
+    "inspect_user_profile",
     "profile_schema",
     "validate_profile_dictionary",
     "validate_profile_patch",

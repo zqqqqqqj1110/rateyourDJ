@@ -13,11 +13,13 @@ from .scoring import (
     FeedbackSignalModel,
     feedback_similarity,
 )
-from .service import FeedbackService
+from .service import FeedbackService, FeedbackTrajectorySink
 from .tools import (
     collect_feedback,
     get_feedback_score,
     get_feedback_summary,
+    inspect_feedback_state,
+    record_feedback_tool,
 )
 
 __all__ = [
@@ -27,6 +29,7 @@ __all__ = [
     "REWARD_BY_FEEDBACK_TYPE",
     "FeedbackRecord",
     "FeedbackService",
+    "FeedbackTrajectorySink",
     "FeedbackSignalModel",
     "FeedbackSummary",
     "collect_feedback",
@@ -34,4 +37,6 @@ __all__ = [
     "feedback_similarity",
     "get_feedback_score",
     "get_feedback_summary",
+    "inspect_feedback_state",
+    "record_feedback_tool",
 ]

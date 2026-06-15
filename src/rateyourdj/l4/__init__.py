@@ -18,7 +18,7 @@ from .scoring import (
     score_candidate,
 )
 from .service import RecommendationRankingService
-from .tools import rank_candidates
+from .tools import rank_candidates, rank_candidates_tool
 
 __all__ = [
     "BASE_SCORE_WEIGHTS",
@@ -33,6 +33,7 @@ __all__ = [
     "diversity_similarity",
     "quality_score",
     "rank_candidates",
+    "rank_candidates_tool",
     "ranking_reasons",
     "ranking_schema",
     "score_candidate",

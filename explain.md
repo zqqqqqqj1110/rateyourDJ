@@ -953,8 +953,9 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 # 本地网页
 
-网页层直接复用 L1-L5 服务，提供用户画像、推荐列表、反馈摘要和反馈按钮。
-它使用 Flask 和原生 HTML/CSS/JavaScript，不需要 Node.js 或前端构建步骤。
+网页层直接复用 L1-L5 服务，提供用户画像、收藏列表、推荐列表、反馈摘要和
+反馈按钮。它使用 Flask 和原生 HTML/CSS/JavaScript，不需要 Node.js 或前端
+构建步骤。
 
 启动：
 
@@ -968,11 +969,493 @@ PYTHONPATH=src python3 -m rateyourdj.web.app
 http://127.0.0.1:8000
 ```
 
-页面中的反馈按钮会真实修改当前用户的 L1 JSON。`favorite` 会加入收藏，
-其他按钮会写入 L5 feedback 并影响下一次 L4 排序。
+页面中的反馈按钮会真实修改当前用户的 L1 JSON。`favorite` 会加入收藏并
+立即显示在“我的收藏”区域，其他按钮会写入 L5 feedback 并影响下一次 L4
+排序。如果 L1 收藏 ID 缺少对应的 L2 文件，收藏 API 会返回
+`missing_song_ids`，页面继续展示其余可用歌曲。
 
 运行网页 API 测试：
 
 ```bash
 PYTHONPATH=src python3 -m unittest tests.test_web -v
 ```
+
+# L1-L5 Agent 工具层
+
+L1-L5 的原有 service 和数据模型保持不变，同时新增了面向 Agent 的结构化工具
+入口。后续 L6 planner 可以观察工具结果，再决定是否调整参数或调用其他工具。
+
+统一返回 `ToolObservation`：
+
+```json
+{
+  "tool": "L4.rank_candidates",
+  "status": "partial",
+  "data": {},
+  "diagnostics": [
+    "requested 10 songs but ranked 4"
+  ],
+  "retryable": true,
+  "suggested_actions": [
+    {
+      "tool": "L4.rank_candidates",
+      "arguments": {
+        "candidate_pool_size": 100
+      },
+      "reason": "expand the L3 candidate pool"
+    }
+  ]
+}
+```
+
+`status` 有三种值：
+
+| 状态 | 含义 |
+| --- | --- |
+| `ok` | 工具正常完成，结果满足当前请求 |
+| `partial` | 有可用结果，但存在缺失数据或数量不足 |
+| `empty` | 没有可用结果，需要调整参数或补充数据 |
+
+当前 Agent 工具：
+
+| 层级 | 工具 | 作用 |
+| --- | --- | --- |
+| L1 | `inspect_user_profile` | 查看收藏、偏好、反馈数量和画像版本 |
+| L2 | `inspect_song_profile` | 查看歌曲画像及缺失 metadata、tags、genres |
+| L3 | `retrieve_candidates_tool` | 召回候选并返回缺失种子、数量不足和重试建议 |
+| L4 | `rank_candidates_tool` | 排序并返回缺失候选、数量不足和可调整参数 |
+| L5 | `inspect_feedback_state` | 查看反馈摘要及缺失的反馈歌曲画像 |
+| L5 | `record_feedback_tool` | 记录反馈并报告 trajectory 是否完成回连 |
+
+L3/L4 在候选不足时会给出结构化建议，例如：
+
+- 降低 `min_score` 或 `min_retrieval_score`。
+- 扩大 `candidate_pool_size`。
+- 放宽 `max_per_artist`。
+- 补采缺失的 L2 种子歌曲。
+
+这些工具目前不会自动重试。它们提供 observation 和建议，下一阶段由 L6 的
+执行循环决定是否采纳。
+
+## L5 trajectory 回写
+
+网页层会把 `JsonTrajectoryStore` 作为 feedback sink 注入 L5。携带合法
+`trajectory_id` 的反馈会同时写入：
+
+```text
+L1 feedback_memory
+data/trajectories/<user_id>/<trajectory_id>.json
+```
+
+trajectory 新增 `feedback_events`：
+
+```json
+{
+  "feedback_events": [
+    {
+      "feedback_type": "like",
+      "song_id": "song-id",
+      "timestamp": "2026-06-11T00:00:00+00:00",
+      "reward_score": 0.6,
+      "recommendation_context": {
+        "trajectory_id": "trajectory-id",
+        "rank": 1,
+        "source": "web"
+      }
+    }
+  ]
+}
+```
+
+trajectory feedback 使用线程锁、文件锁和原子替换，避免并发反馈互相覆盖。
+如果 `trajectory_id` 不属于当前用户，L5 会在写入 L1 前拒绝请求。
+
+运行工具层测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_agent_tools -v
+```
+
+# L6
+
+L6 是自然语言 Agent 编排层。它消费现有 L1-L5 能力，不重新实现画像、召回、
+排序或反馈算法。
+
+## L6 工作流程
+
+```text
+自然语言 query
+    ↓
+解析数量、流派、排除项、相似度和多样性
+    ↓
+调用 L1 工具检查画像和收藏种子
+    ↓
+动态调用 L4，并观察结构化 ToolObservation
+    ↓
+候选不足时扩大候选池、放宽阈值或歌手限制并重试
+    ↓
+仍不足时调用 L3 记录召回诊断
+    ↓
+检查目标约束并返回歌曲、分数拆解和推荐原因
+    ↓
+保存 trajectory
+    ↓
+保存 session；“换一批”继承条件并排除已展示歌曲
+    ↓
+L5 反馈通过 trajectory_id 回连本次请求
+```
+
+L6 第一版已实现：
+
+1. 接收自然语言推荐请求。
+2. 解析推荐数量、流派偏好、排除词、相似度要求和歌手多样性。
+3. 通过工具注册表选择和执行 L1、L3、L4 工具。
+4. 检查候选数量和请求约束，最多执行三次 L4 参数调整。
+5. 使用 L4 的 `ranking_reasons` 和 `score_breakdown` 生成可追溯解释。
+6. 保存计划、工具观察、决策、停止原因、推荐结果和响应文本。
+7. 使用 session 支持“换一批”多轮请求。
+8. 为网页提供聊天式 API。
+
+## 当前解析规则
+
+L6 保留本地确定性解析器作为 fallback，并提供可替换的 `LLMProvider` 接口。
+当前已实现 DeepSeek 官方 API adapter。只有设置 `DEEPSEEK_API_KEY` 并选择
+`auto` 或 `deepseek` provider 时才会产生 API 请求和费用；否则使用规则路径。
+provider 启用后使用最多 5 步的受控 Agent loop，API 不可用或返回非法调用时
+自动回落到规则路径。
+
+规则 fallback 当前支持：
+
+| 自然语言内容 | 解析结果 |
+| --- | --- |
+| `推荐 5 首`、`推荐五首` | `top_k = 5` |
+| `摇滚`、`爵士`、`电子` 等 | 写入 `preference_terms` |
+| `不要“Pink Floyd”` | 写入 `exclude_terms` |
+| `多样一点`、`不同歌手` | `max_per_artist = 1` |
+| `相似` | `min_retrieval_score = 0.1` |
+| `高度相似` | `min_retrieval_score = 0.3` |
+| `换一批`、`再来` | `intent = more`，继承上一轮条件并排除已展示歌曲 |
+
+当前内置的中英文流派映射包括：
+
+```text
+摇滚 rock
+爵士 jazz
+流行 pop
+灵魂 soul
+民谣 folk
+电子 electronic
+朋克 punk
+金属 metal
+放克 funk
+乡村 country
+蓝调 blues
+古典 classical
+氛围 ambient
+```
+
+数量限制在 `1-50`。没有显式数量时，CLI 和 API 默认返回 10 首；网页会使用
+页面中选择的推荐数量作为默认值。
+
+## L6 执行循环
+
+模型模式下，provider 每一步只能返回：
+
+- 一个结构化工具调用；
+- 一个经过 schema 校验的请求条件补丁；
+- 一段可记录的简短决策摘要；
+- 或结束本轮的 `finish` 决策。
+
+模型可见的只读工具为：
+
+```text
+L1.inspect_user_profile
+L2.inspect_song_profile
+L3.retrieve_candidates
+L4.rank_candidates
+L5.inspect_feedback_state
+```
+
+程序会拒绝跨用户访问、未知工具、越界参数和过早结束。模型可以补充规则没有
+识别出的排除项或偏好，但不能删除已识别的排除项、放宽明确要求的歌手多样性、
+取消“换一批”或覆盖明确指定的歌曲数量。模型循环最多 5 步。重复请求更新和
+完全相同的工具调用会被忽略；模型耗尽步骤仍未调用 L4 时，程序会补充一次
+经过相同约束校验的 L4 排序，避免 Agent 空转。
+
+DeepSeek adapter 使用官方 OpenAI-compatible `/chat/completions` 接口和
+function calling。内部 `L4.rank_candidates` 等工具名会转换成 API 接受的
+`L4__rank_candidates`，返回后再映射回内部名称。模型请求不包含真实 user ID；
+本地执行器会在校验后注入当前 user ID。
+
+启用：
+
+```bash
+export DEEPSEEK_API_KEY="你的 API key"
+
+PYTHONPATH=src python3 -m rateyourdj.l6.cli \
+  --agent-mode auto \
+  --llm-provider auto \
+  recommend demo-user '推荐 5 首不同歌手的摇滚，不要 Pink Floyd'
+```
+
+可选环境变量：
+
+```text
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+```
+
+L6 不修改 L4 的评分公式。初始候选池为：
+
+```text
+candidate_pool_size = top_k * 5
+```
+
+随后使用以下 L4 参数：
+
+| 参数 | 来源 |
+| --- | --- |
+| `top_k` | 扩大后的候选池大小 |
+| `candidate_pool_size` | 扩大后的候选池大小 |
+| `max_per_artist` | 自然语言中的多样性要求 |
+| `min_retrieval_score` | 自然语言中的相似度要求 |
+
+每次 L4 调用后，L6 检查过滤后的有效歌曲是否达到 `top_k`。不足时，L6
+读取 `ToolObservation.retryable` 和 `suggested_actions`，合并同一工具的参数
+建议，经白名单、数值范围和用户约束校验后执行。扩大候选池或降低召回阈值
+等具体数值由 L4 工具给出，不在 L6 中重复硬编码。最多尝试三次；仍不足时
+调用 L3 获取召回层诊断并停止。
+
+被采纳的建议会写入 trajectory step 的 `selected_action`，其中同时保存工具
+原始参数补丁、合并后的 `resolved_arguments` 和建议原因。未注册工具、未知
+参数、越界数值，以及违反“每位歌手最多一首”等用户约束的建议不会执行。
+
+执行过程不是无限循环。默认 `max_steps = 5`，允许范围为 `2-10`。停止原因
+包括 `goal_satisfied`、`empty_profile` 和 `insufficient_candidates`。
+
+## 运行 L6
+
+查看 L6 请求和响应 schema：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l6.cli schema
+```
+
+运行自然语言推荐：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l6.cli recommend demo-user \
+  '推荐 5 首多样一点的摇滚，不要“Pink Floyd”'
+```
+
+如果已经重新安装项目，也可以使用：
+
+```bash
+rateyourdj-l6 recommend demo-user \
+  '推荐 5 首多样一点的摇滚，不要“Pink Floyd”'
+```
+
+预期解析结果：
+
+```json
+{
+  "top_k": 5,
+  "max_per_artist": 1,
+  "min_retrieval_score": 0.0,
+  "preference_terms": ["rock"],
+  "exclude_terms": ["pink floyd"],
+  "intent": "recommend",
+  "exclude_seen": false
+}
+```
+
+响应中的主要字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `trajectory_id` | 本次请求的唯一 UUID |
+| `session_id` | 多轮会话 UUID |
+| `user_id` | 当前 L1 用户 |
+| `query` | 原始自然语言请求 |
+| `parsed_request` | 解析后的 L6 参数 |
+| `message` | L6 生成的总体推荐说明 |
+| `ranked_songs` | 过滤后的 L4 推荐结果 |
+| `seed_song_ids` | 本次 L3/L4 使用的有效收藏种子 |
+| `missing_seed_song_ids` | L1 中存在但缺少 L2 文件的种子 |
+| `stop_reason` | 执行循环停止原因 |
+| `attempts` | L4 排序尝试次数 |
+| `tool_calls` | 每步工具参数、观察、采纳的 suggested action 和后续决策 |
+
+每首 `ranked_songs` 继续保留 L4 的：
+
+```text
+final_score
+base_score
+score_breakdown
+diversity_penalty
+ranking_reasons
+best_seed_song_id
+retrieval_sources
+```
+
+## Trajectory
+
+每次 L6 请求会写入：
+
+```text
+data/trajectories/<user_id>/<trajectory_id>.json
+```
+
+trajectory 包含：
+
+| 字段 | 内容 |
+| --- | --- |
+| `trajectory_id` | 请求 UUID |
+| `session_id` | 所属多轮会话 UUID |
+| `turn_index` | 会话中的轮次 |
+| `user_id` | 用户 ID |
+| `query` | 原始请求 |
+| `parsed_request` | 解析后的参数 |
+| `plan` | 本轮初始目标和条件工具计划 |
+| `tool_calls` | 每步工具名称、参数、完整 observation 和决策 |
+| `recommendations` | 最终返回的推荐歌曲 |
+| `response_text` | L6 总体解释 |
+| `feedback_events` | L5 回写的反馈和 reward |
+| `stop_reason` | 达成目标、空画像或候选不足 |
+| `agent_mode` | 实际使用 `model` 或 `rules` |
+| `provider` | provider 名称；未配置时为空 |
+| `fallback_reason` | 模型路径降级原因 |
+| `agent_decisions` | 工具选择和可验证决策摘要，不包含隐藏思维链 |
+| `created_at` | UTC 创建时间 |
+
+查看某个用户已保存的 trajectory：
+
+```bash
+find data/trajectories/demo-user -name '*.json' -print
+```
+
+查看最近生成的内容：
+
+```bash
+python3 -m json.tool \
+  data/trajectories/demo-user/<trajectory-id>.json
+```
+
+trajectory 运行时数据已加入 `.gitignore`，默认不会提交到 Git。
+
+多轮会话状态写入：
+
+```text
+data/sessions/<session_id>.json
+```
+
+其中保存累计排除词、上一轮偏好、已展示歌曲、轮次和最近 trajectory。会话
+数据同样不会提交到 Git。
+
+## 网页 API
+
+启动网页：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.web.app
+```
+
+聊天接口：
+
+```text
+POST /api/chat/<user_id>
+Content-Type: application/json
+```
+
+请求示例：
+
+```json
+{
+  "query": "推荐五首多样一点的摇滚，不要“Pink Floyd”",
+  "default_top_k": 10
+}
+```
+
+`default_top_k` 可省略，允许范围为 `1-50`。如果 query 自己包含数量，query
+中的数量优先。
+
+页面收到 L6 响应后，会继续使用现有推荐卡片展示：
+
+- 歌名和歌手。
+- 最终分数。
+- `ranking_reasons`。
+- `score_breakdown`。
+- 喜欢、跳过、不喜欢和收藏按钮。
+
+## L6 与 L5 回连
+
+用户点击 L6 推荐结果的反馈按钮时，网页会将当前 trajectory ID 写入：
+
+```json
+{
+  "recommendation_context": {
+    "trajectory_id": "<trajectory-id>",
+    "rank": 1,
+    "final_score": 0.42,
+    "source": "web"
+  }
+}
+```
+
+该记录由 L5 同时写入 L1 `feedback_memory` 和 L6 trajectory。因此可以通过
+`trajectory_id` 将：
+
+```text
+自然语言 query
+→ 解析参数
+→ L4 工具调用
+→ 推荐歌曲
+→ 用户反馈
+→ reward
+```
+
+串成完整的数据链路。
+
+## 验证 L6
+
+运行 L6 单元测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_l6 -v
+```
+
+运行网页 API 测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_web -v
+```
+
+运行全部测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+当前预期结果：
+
+```text
+Ran 86 tests
+OK (skipped=4)
+```
+
+4 项跳过项是需要网络或凭据的 Spotify、MusicBrainz 和 Last.fm 在线 smoke
+tests，不代表 L6 失败。
+
+## 当前限制
+
+- 未配置 provider 时使用规则 fallback，不能理解任意复杂自然语言。
+- 已接入 DeepSeek 官方 API；OpenAI adapter 尚未实现。
+- 流派偏好目前作为结果过滤条件，不会动态修改 L4 权重。
+- 排除项支持 `不要“Pink Floyd”`、`不要 Pink Floyd` 和
+  `不要pinkfloyd` 等格式。
+- 在线扩展候选和音频试听尚未接入。
+- trajectory 已回写反馈，但还没有独立的训练数据导出器。
+- L6 没有调用外部 LLM，因此当前解释来自可追溯的规则和 L4 分数。
+
+L6 MVP 不包含 SFT/GRPO。训练需要先积累足够的多用户 trajectory 和 reward
+数据；当前少量本地反馈只适合验证数据链路。

@@ -1,4 +1,9 @@
-const state = { userId: "demo-user", topK: 10 };
+const state = {
+  userId: "demo-user",
+  topK: 10,
+  trajectoryId: null,
+  sessionId: null,
+};
 
 const $ = (selector) => document.querySelector(selector);
 const recommendations = $("#recommendations");
@@ -9,7 +14,51 @@ controls.addEventListener("submit", async (event) => {
   event.preventDefault();
   state.userId = $("#user-id").value.trim();
   state.topK = Number($("#top-k").value);
+  state.sessionId = null;
   await loadDashboard();
+});
+
+$("#agent-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = $("#agent-query").value.trim();
+  if (!query) {
+    showMessage("请输入你想听的内容。");
+    return;
+  }
+  state.userId = $("#user-id").value.trim();
+  setLoading(true);
+  hideMessage();
+  try {
+    const result = await getJSON(
+      `/api/chat/${encodeURIComponent(state.userId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          default_top_k: state.topK,
+          session_id: state.sessionId,
+        }),
+      }
+    );
+    state.trajectoryId = result.trajectory_id;
+    state.sessionId = result.session_id;
+    $("#agent-response").textContent = result.message;
+    $("#agent-response").classList.remove("hidden");
+    const execution =
+      result.agent_mode === "model"
+        ? `model ${result.provider || "configured"}`
+        : result.fallback_reason
+          ? "rules fallback"
+          : "rules";
+    $("#agent-meta").textContent =
+      `session ${result.session_id.slice(0, 8)} · trajectory ${result.trajectory_id.slice(0, 8)} · ${execution} · ${result.ranked_songs.length} 首`;
+    renderRecommendations(result);
+  } catch (error) {
+    showMessage(error.message);
+  } finally {
+    setLoading(false);
+  }
 });
 
 async function loadDashboard() {
@@ -29,6 +78,7 @@ async function loadDashboard() {
     renderProfile(profile, feedback);
     renderCollection(collection);
     renderRecommendations(ranking);
+    state.trajectoryId = null;
   } catch (error) {
     $("#collection").replaceChildren();
     recommendations.replaceChildren();
@@ -76,7 +126,13 @@ function renderChips(selector, items) {
 function renderCollection(result) {
   const collection = $("#collection");
   collection.replaceChildren();
-  $("#collection-meta").textContent = `${result.total} 首歌曲`;
+  const missingSongIds = Array.isArray(result.missing_song_ids)
+    ? result.missing_song_ids
+    : [];
+  const missing = missingSongIds.length;
+  $("#collection-meta").textContent = missing
+    ? `${result.total} 首可显示 · ${missing} 首画像缺失`
+    : `${result.total} 首歌曲`;
 
   if (!result.songs.length) {
     const empty = document.createElement("p");
@@ -111,8 +167,11 @@ function renderCollection(result) {
 
 function renderRecommendations(result) {
   recommendations.replaceChildren();
+  const seedSongIds = Array.isArray(result.seed_song_ids)
+    ? result.seed_song_ids
+    : [];
   $("#result-meta").textContent =
-    `${result.ranked_songs.length} 首推荐 · ${result.seed_song_ids.length} 首种子`;
+    `${result.ranked_songs.length} 首推荐 · ${seedSongIds.length} 首种子`;
 
   if (!result.ranked_songs.length) {
     showMessage("当前没有可推荐歌曲。请检查收藏种子和候选库。");
@@ -170,6 +229,7 @@ async function sendFeedback(card, song, feedbackType) {
           rank: song.rank,
           final_score: song.final_score,
           source: "web",
+          trajectory_id: state.trajectoryId,
         },
       }),
     });

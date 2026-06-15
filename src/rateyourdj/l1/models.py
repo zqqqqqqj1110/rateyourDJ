@@ -32,6 +32,13 @@ FEEDBACK_RECORD_FIELDS = (
     "recommendation_context",
 )
 
+REQUIRED_FEEDBACK_RECORD_FIELDS = {
+    "feedback_type",
+    "song_id",
+    "timestamp",
+    "reward_score",
+}
+
 TOP_LEVEL_IMPORT_FIELDS = (
     "collection_song_ids",
     *PREFERENCE_FIELDS,
@@ -139,10 +146,15 @@ def _validate_preferences(value: Any, path: str) -> dict[str, float]:
 def _validate_feedback_record(value: Any, path: str) -> dict[str, Any]:
     record = _require_mapping(value, path)
     _reject_unknown_keys(record, FEEDBACK_RECORD_FIELDS, path)
+    missing = sorted(REQUIRED_FEEDBACK_RECORD_FIELDS - set(record))
+    if missing:
+        raise ProfileValidationError(
+            f"{path} is missing fields: {', '.join(missing)}"
+        )
     validated = deepcopy(record)
 
     for field_name in ("song_id", "timestamp"):
-        if field_name in record and (
+        if (
             not isinstance(record[field_name], str)
             or not record[field_name].strip()
         ):
@@ -150,13 +162,13 @@ def _validate_feedback_record(value: Any, path: str) -> dict[str, Any]:
                 f"{path}.{field_name} must be a non-empty string"
             )
 
-    if "feedback_type" in record and record["feedback_type"] not in FEEDBACK_TYPES:
+    if record["feedback_type"] not in FEEDBACK_TYPES:
         raise ProfileValidationError(
             f"{path}.feedback_type must be one of "
             + ", ".join(FEEDBACK_TYPES)
         )
 
-    if "reward_score" in record and (
+    if (
         isinstance(record["reward_score"], bool)
         or not isinstance(record["reward_score"], (int, float))
     ):

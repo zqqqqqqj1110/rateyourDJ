@@ -14,7 +14,7 @@ from .similarity import (
     score_song_pair,
     weighted_jaccard,
 )
-from .tools import retrieve_candidates
+from .tools import retrieve_candidates, retrieve_candidates_tool
 
 __all__ = [
     "SCORE_WEIGHTS",
@@ -26,6 +26,7 @@ __all__ = [
     "release_year_similarity",
     "retrieval_schema",
     "retrieve_candidates",
+    "retrieve_candidates_tool",
     "score_song_pair",
     "weighted_jaccard",
 ]

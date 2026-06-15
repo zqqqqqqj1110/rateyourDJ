@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -96,6 +97,7 @@ class DictionaryValidationTests(unittest.TestCase):
             {"genre_preferences": {"rock": True}},
             {"tag_preferences": {"": 0.5}},
             {"feedback_memory": [{"unknown_field": "value"}]},
+            {"feedback_memory": [{}]},
             {"feedback_memory": [{"feedback_type": "unknown"}]},
         )
 
@@ -166,6 +168,7 @@ class ProfileMigrationTests(unittest.TestCase):
                         "feedback_type": "play",
                         "song_id": "song-3",
                         "timestamp": "2026-06-10T00:00:00+00:00",
+                        "reward_score": 0.1,
                     }
                 ],
             },
@@ -207,11 +210,82 @@ class ProfileMigrationTests(unittest.TestCase):
         )
         self.assertEqual(len(updated.feedback_memory), 2)
 
+    def test_concurrent_feedback_imports_do_not_overwrite_each_other(self) -> None:
+        errors: list[BaseException] = []
+
+        def record_feedback(index: int) -> None:
+            try:
+                service = UserProfileService(JsonProfileStore(self.root))
+                service.import_profile_patch(
+                    "concurrent-user",
+                    {
+                        "feedback_memory": [
+                            {
+                                "feedback_type": "like",
+                                "song_id": f"song-{index}",
+                                "timestamp": "2026-06-11T00:00:00+00:00",
+                                "reward_score": 0.6,
+                            }
+                        ]
+                    },
+                )
+            except BaseException as error:
+                errors.append(error)
+
+        threads = [
+            threading.Thread(target=record_feedback, args=(index,))
+            for index in range(20)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        profile = self.store.load("concurrent-user")
+        self.assertEqual(errors, [])
+        self.assertEqual(len(profile.feedback_memory), 20)
+        self.assertEqual(
+            {record["song_id"] for record in profile.feedback_memory},
+            {f"song-{index}" for index in range(20)},
+        )
+        self.assertEqual(profile.version, 21)
+
     def test_replace_requires_complete_profile_data(self) -> None:
         with self.assertRaises(ValueError):
             self.service.replace_profile_data(
                 "user-1", {"collection_song_ids": []}
             )
+
+    def test_collection_rebuild_can_preserve_newer_feedback(self) -> None:
+        stale_data = {
+            "collection_song_ids": ["song-1"],
+            "artist_preferences": {"Artist": 1.0},
+            "genre_preferences": {"rock": 1.0},
+            "tag_preferences": {"rock": 1.0},
+            "feedback_memory": [],
+        }
+        self.service.import_profile_patch(
+            "user-1",
+            {
+                "feedback_memory": [
+                    {
+                        "feedback_type": "like",
+                        "song_id": "song-2",
+                        "timestamp": "2026-06-11T00:00:00+00:00",
+                        "reward_score": 0.6,
+                    }
+                ]
+            },
+        )
+
+        rebuilt = self.service.replace_profile_data(
+            "user-1",
+            stale_data,
+            preserve_feedback=True,
+        )
+
+        self.assertEqual(len(rebuilt.feedback_memory), 1)
+        self.assertEqual(rebuilt.feedback_memory[0]["song_id"], "song-2")
 
     def test_functional_import_api(self) -> None:
         profile = import_profile_dictionary(

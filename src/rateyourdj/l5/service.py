@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from rateyourdj.l1 import FEEDBACK_TYPES, JsonProfileStore, UserProfileService
 from rateyourdj.l2 import JsonSongStore, SongNotFoundError
@@ -17,14 +17,27 @@ from .models import (
 from .scoring import FeedbackSignalModel
 
 
+class FeedbackTrajectorySink(Protocol):
+    def exists(self, user_id: str, trajectory_id: str) -> bool: ...
+
+    def append_feedback(
+        self,
+        user_id: str,
+        trajectory_id: str,
+        feedback: dict[str, Any],
+    ) -> None: ...
+
+
 class FeedbackService:
     def __init__(
         self,
         profile_store: JsonProfileStore,
         song_store: JsonSongStore,
+        trajectory_sink: FeedbackTrajectorySink | None = None,
     ) -> None:
         self.profile_store = profile_store
         self.song_store = song_store
+        self.trajectory_sink = trajectory_sink
         self.profile_service = UserProfileService(profile_store)
 
     def record(
@@ -53,6 +66,22 @@ class FeedbackService:
         context = {} if recommendation_context is None else recommendation_context
         if not isinstance(context, dict):
             raise ValueError("recommendation_context must be an object")
+        trajectory_id = context.get("trajectory_id")
+        if trajectory_id is not None and (
+            not isinstance(trajectory_id, str) or not trajectory_id.strip()
+        ):
+            raise ValueError(
+                "recommendation_context.trajectory_id must be a non-empty string"
+            )
+        if (
+            trajectory_id
+            and self.trajectory_sink is not None
+            and not self.trajectory_sink.exists(user_id, trajectory_id)
+        ):
+            raise ValueError(
+                "recommendation_context.trajectory_id does not exist "
+                f"for user {user_id}"
+            )
 
         record = FeedbackRecord(
             feedback_type=feedback_type,
@@ -74,6 +103,12 @@ class FeedbackService:
                 song_ids=collection_song_ids,
                 song_data_dir=self.song_store.root,
                 user_data_dir=self.profile_store.root,
+            )
+        if trajectory_id and self.trajectory_sink is not None:
+            self.trajectory_sink.append_feedback(
+                user_id,
+                trajectory_id,
+                record.to_dict(),
             )
         return record
 
