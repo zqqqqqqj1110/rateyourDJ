@@ -10,6 +10,7 @@ from .models import (
     BASE_SCORE_WEIGHTS,
     DIVERSITY_SIMILARITY_WEIGHTS,
     FEEDBACK_ADJUSTMENT_WEIGHT,
+    RankingWeights,
 )
 
 
@@ -53,7 +54,9 @@ def score_candidate(
     candidate: RetrievalCandidate,
     *,
     feedback_score: float = 0.0,
+    weights: RankingWeights | None = None,
 ) -> tuple[float, dict[str, float], dict[str, float]]:
+    resolved_weights = weights or RankingWeights()
     raw_scores = {
         "retrieval": candidate.similarity_score,
         "artist_preference": artist_preference_score(
@@ -73,16 +76,22 @@ def score_candidate(
     }
     breakdown = {
         name: round(raw_scores[name] * weight, 6)
-        for name, weight in BASE_SCORE_WEIGHTS.items()
+        for name, weight in resolved_weights.base_score_weights.items()
     }
     breakdown["feedback_adjustment"] = round(
-        raw_scores["feedback"] * FEEDBACK_ADJUSTMENT_WEIGHT,
+        raw_scores["feedback"] * resolved_weights.feedback_adjustment_weight,
         6,
     )
     return round(sum(breakdown.values()), 6), breakdown, raw_scores
 
 
-def diversity_similarity(left: SongProfile, right: SongProfile) -> float:
+def diversity_similarity(
+    left: SongProfile,
+    right: SongProfile,
+    *,
+    weights: RankingWeights | None = None,
+) -> float:
+    resolved_weights = weights or RankingWeights()
     artist_match = float(
         bool(_normalized_text(left.metadata["artist"]))
         and _normalized_text(left.metadata["artist"])
@@ -98,7 +107,7 @@ def diversity_similarity(left: SongProfile, right: SongProfile) -> float:
     }
     return sum(
         raw_scores[name] * weight
-        for name, weight in DIVERSITY_SIMILARITY_WEIGHTS.items()
+        for name, weight in resolved_weights.diversity_similarity_weights.items()
     )
 
 

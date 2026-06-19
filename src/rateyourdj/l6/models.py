@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+TRAJECTORY_SCHEMA_VERSION = "trajectory_v1"
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -93,6 +96,16 @@ class AgentTrajectory:
     provider: str | None = None
     fallback_reason: str | None = None
     agent_decisions: list[dict[str, Any]] = field(default_factory=list)
+    trajectory_schema_version: str = TRAJECTORY_SCHEMA_VERSION
+    loop_contract_version: str | None = None
+    tool_schema_version: str | None = None
+    user_memory_snapshot: dict[str, Any] = field(default_factory=dict)
+    session_memory_snapshot: dict[str, Any] = field(default_factory=dict)
+    retrieval_snapshot: dict[str, Any] = field(default_factory=dict)
+    ranked_candidates: list[dict[str, Any]] = field(default_factory=list)
+    final_recommendations: list[dict[str, Any]] = field(default_factory=list)
+    feedback_contexts: list[dict[str, Any]] = field(default_factory=list)
+    collection_writes: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now_iso)
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,6 +133,25 @@ class AgentTrajectory:
             "agent_decisions": [
                 dict(decision) for decision in self.agent_decisions
             ],
+            "trajectory_schema_version": self.trajectory_schema_version,
+            "loop_contract_version": self.loop_contract_version,
+            "tool_schema_version": self.tool_schema_version,
+            "user_memory_snapshot": dict(self.user_memory_snapshot),
+            "session_memory_snapshot": dict(self.session_memory_snapshot),
+            "retrieval_snapshot": dict(self.retrieval_snapshot),
+            "ranked_candidates": [
+                dict(candidate) for candidate in self.ranked_candidates
+            ],
+            "final_recommendations": [
+                dict(recommendation)
+                for recommendation in self.final_recommendations
+            ],
+            "feedback_contexts": [
+                dict(context) for context in self.feedback_contexts
+            ],
+            "collection_writes": [
+                dict(item) for item in self.collection_writes
+            ],
             "created_at": self.created_at,
         }
 
@@ -146,6 +178,16 @@ class AgentTrajectory:
             "provider",
             "fallback_reason",
             "agent_decisions",
+            "trajectory_schema_version",
+            "loop_contract_version",
+            "tool_schema_version",
+            "user_memory_snapshot",
+            "session_memory_snapshot",
+            "retrieval_snapshot",
+            "ranked_candidates",
+            "final_recommendations",
+            "feedback_contexts",
+            "collection_writes",
         }
         unknown = sorted(set(value) - required - optional)
         if missing:
@@ -190,6 +232,49 @@ class AgentTrajectory:
             ),
             agent_decisions=[
                 dict(item) for item in value.get("agent_decisions", [])
+            ],
+            trajectory_schema_version=str(
+                value.get(
+                    "trajectory_schema_version",
+                    TRAJECTORY_SCHEMA_VERSION,
+                )
+            ),
+            loop_contract_version=(
+                str(value["loop_contract_version"])
+                if value.get("loop_contract_version") is not None
+                else None
+            ),
+            tool_schema_version=(
+                str(value["tool_schema_version"])
+                if value.get("tool_schema_version") is not None
+                else None
+            ),
+            user_memory_snapshot=dict(
+                value.get("user_memory_snapshot", {})
+            ),
+            session_memory_snapshot=dict(
+                value.get("session_memory_snapshot", {})
+            ),
+            retrieval_snapshot=dict(value.get("retrieval_snapshot", {})),
+            ranked_candidates=[
+                dict(item)
+                for item in value.get(
+                    "ranked_candidates",
+                    value.get("recommendations", []),
+                )
+            ],
+            final_recommendations=[
+                dict(item)
+                for item in value.get(
+                    "final_recommendations",
+                    value.get("recommendations", []),
+                )
+            ],
+            feedback_contexts=[
+                dict(item) for item in value.get("feedback_contexts", [])
+            ],
+            collection_writes=[
+                dict(item) for item in value.get("collection_writes", [])
             ],
             created_at=str(value["created_at"]),
         )

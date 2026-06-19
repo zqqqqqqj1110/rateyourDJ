@@ -9,9 +9,15 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+from rateyourdj.l4 import RankingWeights
 from rateyourdj.l6 import AgentTrajectory
 
-from .models import DatasetSplitResult, EvaluationReport, ExportResult
+from .models import (
+    DatasetSplitResult,
+    EvaluationReport,
+    ExportResult,
+    RankingTuningReport,
+)
 
 
 CSV_FIELDS = [
@@ -206,6 +212,78 @@ class TrajectoryDatasetService:
             skipped_files=skipped,
         )
 
+    def analyze_ranking_feedback(
+        self,
+        *,
+        user_id: str | None = None,
+        feedback_only: bool = True,
+    ) -> RankingTuningReport:
+        trajectories, _skipped = self.load(
+            user_id=user_id,
+            feedback_only=feedback_only,
+        )
+        rewards: list[float] = []
+        rank_rewards: dict[str, list[float]] = {}
+        score_bucket_rewards: dict[str, list[float]] = {}
+        source_counts: Counter[str] = Counter()
+        contextual_feedback_count = 0
+
+        for trajectory in trajectories:
+            for context in trajectory.feedback_contexts:
+                reward = context.get("reward_score")
+                if not _is_number(reward):
+                    continue
+                numeric_reward = float(reward)
+                rewards.append(numeric_reward)
+                contextual_feedback_count += 1
+
+                rank_key = str(context.get("recommendation_rank") or "unknown")
+                rank_rewards.setdefault(rank_key, []).append(numeric_reward)
+
+                score_bucket = _score_bucket(
+                    context.get("recommended_final_score")
+                )
+                score_bucket_rewards.setdefault(score_bucket, []).append(
+                    numeric_reward
+                )
+
+                source_key = str(context.get("feedback_source") or "unknown")
+                source_counts[source_key] += 1
+
+        sorted_rank_items = sorted(
+            rank_rewards.items(),
+            key=lambda item: _sort_rank_key(item[0]),
+        )
+        return RankingTuningReport(
+            trajectory_count=len(trajectories),
+            feedback_event_count=sum(
+                len(trajectory.feedback_events) for trajectory in trajectories
+            ),
+            contextual_feedback_count=contextual_feedback_count,
+            collection_write_count=sum(
+                len(trajectory.collection_writes)
+                for trajectory in trajectories
+            ),
+            average_reward=_average(rewards),
+            current_weights=RankingWeights().to_dict(),
+            reward_by_rank={
+                key: _average(values) for key, values in sorted_rank_items
+            },
+            positive_rate_by_rank={
+                key: _ratio(sum(value > 0 for value in values), len(values))
+                for key, values in sorted_rank_items
+            },
+            negative_rate_by_rank={
+                key: _ratio(sum(value < 0 for value in values), len(values))
+                for key, values in sorted_rank_items
+            },
+            reward_by_score_bucket={
+                key: _average(values)
+                for key, values in sorted(score_bucket_rewards.items())
+            },
+            feedback_count_by_source=dict(sorted(source_counts.items())),
+        )
+
     def split_by_user(
         self,
         output_dir: str | Path,
@@ -377,8 +455,17 @@ class TrajectoryDatasetService:
         recommendations = [
             dict(item) for item in trajectory.recommendations
         ]
+        user_memory_snapshot = dict(trajectory.user_memory_snapshot)
+        session_memory_snapshot = dict(trajectory.session_memory_snapshot)
+        retrieval_snapshot = dict(trajectory.retrieval_snapshot)
         feedback_events = [
             dict(item) for item in trajectory.feedback_events
+        ]
+        feedback_contexts = [
+            dict(item) for item in trajectory.feedback_contexts
+        ]
+        collection_writes = [
+            dict(item) for item in trajectory.collection_writes
         ]
         agent_decisions = [
             dict(item) for item in trajectory.agent_decisions
@@ -388,16 +475,38 @@ class TrajectoryDatasetService:
             plan = _redact_user_ids(plan, user_key)
             tool_calls = _redact_user_ids(tool_calls, user_key)
             recommendations = _redact_user_ids(recommendations, user_key)
+            user_memory_snapshot = _redact_user_ids(
+                user_memory_snapshot,
+                user_key,
+            )
+            session_memory_snapshot = _redact_user_ids(
+                session_memory_snapshot,
+                user_key,
+            )
+            retrieval_snapshot = _redact_user_ids(
+                retrieval_snapshot,
+                user_key,
+            )
             feedback_events = _redact_user_ids(feedback_events, user_key)
+            feedback_contexts = _redact_user_ids(feedback_contexts, user_key)
+            collection_writes = _redact_user_ids(collection_writes, user_key)
             agent_decisions = _redact_user_ids(agent_decisions, user_key)
         return {
             **summary,
+            "trajectory_schema_version": trajectory.trajectory_schema_version,
+            "loop_contract_version": trajectory.loop_contract_version,
+            "tool_schema_version": trajectory.tool_schema_version,
             "parsed_request": parsed_request,
             "plan": plan,
             "tool_calls": tool_calls,
             "recommendations": recommendations,
+            "user_memory_snapshot": user_memory_snapshot,
+            "session_memory_snapshot": session_memory_snapshot,
+            "retrieval_snapshot": retrieval_snapshot,
             "response_text": trajectory.response_text,
             "feedback_events": feedback_events,
+            "feedback_contexts": feedback_contexts,
+            "collection_writes": collection_writes,
             "fallback_reason": trajectory.fallback_reason,
             "agent_decisions": agent_decisions,
         }
@@ -485,6 +594,21 @@ def _ratio(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(numerator / denominator, 6)
+
+
+def _score_bucket(value: Any) -> str:
+    if not _is_number(value):
+        return "unknown"
+    score = max(0.0, min(float(value), 1.0))
+    lower = math.floor(score * 5) / 5
+    upper = min(1.0, lower + 0.2)
+    return f"{lower:.1f}-{upper:.1f}"
+
+
+def _sort_rank_key(value: str) -> tuple[int, str]:
+    if value.isdigit():
+        return (0, f"{int(value):06d}")
+    return (1, value)
 
 
 def _allocate_split_counts(

@@ -12,6 +12,7 @@ from rateyourdj.l3 import (
     RetrievalResult,
 )
 from rateyourdj.l4 import (
+    RankingWeights,
     RecommendationRankingService,
     rank_candidates,
     ranking_schema,
@@ -131,6 +132,34 @@ class L4ScoringTests(unittest.TestCase):
                 )
             )
         )
+
+    def test_custom_ranking_weights_change_breakdown(self) -> None:
+        profile = UserProfile(user_id="user-1")
+        song = make_song(
+            "candidate",
+            title="Candidate",
+            artist="Artist",
+        )
+
+        score, breakdown, _raw_scores = score_candidate(
+            profile,
+            song,
+            make_candidate("candidate", 1.0),
+            weights=RankingWeights(
+                base_score_weights={
+                    "retrieval": 0.6,
+                    "artist_preference": 0.05,
+                    "genre_preference": 0.1,
+                    "tag_preference": 0.1,
+                    "quality": 0.05,
+                },
+                feedback_adjustment_weight=0.2,
+            ),
+        )
+
+        self.assertEqual(score, 0.65)
+        self.assertEqual(breakdown["retrieval"], 0.6)
+        self.assertEqual(breakdown["quality"], 0.05)
 
 
 class L4RankingTests(unittest.TestCase):

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
-BASE_SCORE_WEIGHTS = {
+DEFAULT_BASE_SCORE_WEIGHTS = {
     "retrieval": 0.50,
     "artist_preference": 0.08,
     "genre_preference": 0.14,
@@ -12,14 +12,41 @@ BASE_SCORE_WEIGHTS = {
     "quality": 0.10,
 }
 
-DIVERSITY_PENALTY_WEIGHT = 0.15
-FEEDBACK_ADJUSTMENT_WEIGHT = 0.15
+DEFAULT_DIVERSITY_PENALTY_WEIGHT = 0.15
+DEFAULT_FEEDBACK_ADJUSTMENT_WEIGHT = 0.15
 
-DIVERSITY_SIMILARITY_WEIGHTS = {
+DEFAULT_DIVERSITY_SIMILARITY_WEIGHTS = {
     "artist": 0.20,
     "genres": 0.40,
     "tags": 0.40,
 }
+
+BASE_SCORE_WEIGHTS = dict(DEFAULT_BASE_SCORE_WEIGHTS)
+DIVERSITY_PENALTY_WEIGHT = DEFAULT_DIVERSITY_PENALTY_WEIGHT
+FEEDBACK_ADJUSTMENT_WEIGHT = DEFAULT_FEEDBACK_ADJUSTMENT_WEIGHT
+DIVERSITY_SIMILARITY_WEIGHTS = dict(DEFAULT_DIVERSITY_SIMILARITY_WEIGHTS)
+
+
+@dataclass(frozen=True, slots=True)
+class RankingWeights:
+    base_score_weights: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_BASE_SCORE_WEIGHTS)
+    )
+    diversity_penalty_weight: float = DEFAULT_DIVERSITY_PENALTY_WEIGHT
+    feedback_adjustment_weight: float = DEFAULT_FEEDBACK_ADJUSTMENT_WEIGHT
+    diversity_similarity_weights: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_DIVERSITY_SIMILARITY_WEIGHTS)
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "base_score_weights": dict(self.base_score_weights),
+            "diversity_penalty_weight": self.diversity_penalty_weight,
+            "feedback_adjustment_weight": self.feedback_adjustment_weight,
+            "diversity_similarity_weights": dict(
+                self.diversity_similarity_weights
+            ),
+        }
 
 
 @dataclass(slots=True)

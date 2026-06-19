@@ -111,6 +111,84 @@ class EvaluationReport:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class EvalCaseResult:
+    case_id: str
+    category: str
+    passed: bool
+    failure_reasons: list[str]
+    stop_reason: str
+    recommendation_count: int
+    tool_names: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "case_id": self.case_id,
+            "category": self.category,
+            "passed": self.passed,
+            "failure_reasons": list(self.failure_reasons),
+            "stop_reason": self.stop_reason,
+            "recommendation_count": self.recommendation_count,
+            "tool_names": list(self.tool_names),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class EvalSuiteReport:
+    suite_name: str
+    case_count: int
+    passed_count: int
+    failed_count: int
+    category_counts: dict[str, int]
+    failed_case_ids: list[str]
+    cases: list[EvalCaseResult]
+
+    @property
+    def passed(self) -> bool:
+        return self.failed_count == 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "suite_name": self.suite_name,
+            "case_count": self.case_count,
+            "passed_count": self.passed_count,
+            "failed_count": self.failed_count,
+            "category_counts": dict(self.category_counts),
+            "failed_case_ids": list(self.failed_case_ids),
+            "cases": [case.to_dict() for case in self.cases],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RankingTuningReport:
+    trajectory_count: int
+    feedback_event_count: int
+    contextual_feedback_count: int
+    collection_write_count: int
+    average_reward: float
+    current_weights: dict[str, Any]
+    reward_by_rank: dict[str, float]
+    positive_rate_by_rank: dict[str, float]
+    negative_rate_by_rank: dict[str, float]
+    reward_by_score_bucket: dict[str, float]
+    feedback_count_by_source: dict[str, int]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trajectory_count": self.trajectory_count,
+            "feedback_event_count": self.feedback_event_count,
+            "contextual_feedback_count": self.contextual_feedback_count,
+            "collection_write_count": self.collection_write_count,
+            "average_reward": self.average_reward,
+            "current_weights": dict(self.current_weights),
+            "reward_by_rank": dict(self.reward_by_rank),
+            "positive_rate_by_rank": dict(self.positive_rate_by_rank),
+            "negative_rate_by_rank": dict(self.negative_rate_by_rank),
+            "reward_by_score_bucket": dict(self.reward_by_score_bucket),
+            "feedback_count_by_source": dict(self.feedback_count_by_source),
+        }
+
+
 def l7_schema() -> dict[str, Any]:
     return {
         "input": "L6 trajectory JSON files",
@@ -150,5 +228,10 @@ def l7_schema() -> dict[str, Any]:
             "artist_diversity": (
                 "unique recommended artists divided by recommendations"
             ),
+        },
+        "eval_suite": {
+            "format": "fixed case list with session setup and property assertions",
+            "default_case_count": 50,
+            "goal": "regression checks for loop, session memory, and ranking",
         },
     }

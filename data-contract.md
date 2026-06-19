@@ -120,27 +120,30 @@ Schema:
   "user_id": "demo-user",
   "turn_count": 3,
   "current_intent": "recommend",
+  "last_user_query": "换一批，不要刚才推荐过的",
+  "preference_terms": ["british rock"],
+  "exclude_terms": ["pink floyd"],
+  "seen_track_ids": ["spotify:track:..."],
+  "seed_track_ids": ["spotify:track:seed_1"],
   "active_constraints": {
     "limit": 10,
     "exclude_seen": true,
-    "max_per_artist": 2,
-    "temporary_exclusions": [
-      {
-        "type": "artist",
-        "value": "Pink Floyd",
-        "source": "user_request",
-        "created_at": "2026-06-16T00:00:00Z"
-      }
-    ],
-    "market": "AU"
+    "max_per_artist": 1,
+    "market": "AU",
+    "year_range": {
+      "min": 1990,
+      "max": 2005
+    }
   },
-  "preference_terms": ["british rock"],
-  "seen_track_ids": ["spotify:track:..."],
   "last_run_id": "run_123",
-  "last_request": {
-    "message": "换一批，不要刚才推荐过的",
-    "parsed_at": "2026-06-16T00:00:00Z"
-  },
+  "last_recommendation_ids": ["spotify:track:..."],
+  "temporary_feedback": [
+    {
+      "track_id": "spotify:track:...",
+      "event": "skipped",
+      "created_at": "2026-06-16T00:00:00Z"
+    }
+  ],
   "created_at": "2026-06-16T00:00:00Z",
   "updated_at": "2026-06-16T00:00:00Z"
 }
@@ -149,6 +152,7 @@ Schema:
 Rules:
 
 - `seen_track_ids` is used to support "换一批" and `exclude_seen`.
+- `exclude_terms`, `seed_track_ids`, and `temporary_feedback` are session-scoped and do not directly mutate long-term memory.
 - Temporary exclusions expire with the session unless the user explicitly makes them permanent.
 - Session memory should not directly mutate long-term memory.
 - Session ownership must be enforced by `user_id`.

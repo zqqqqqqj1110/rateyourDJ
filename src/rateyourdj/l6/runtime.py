@@ -4,6 +4,7 @@ from typing import Any
 
 from rateyourdj.agent_tools import ToolObservation
 
+from .loop_contract import LOOP_CONTRACT_VERSION, loop_phase_for_tool
 from .models import AgentRequest
 
 
@@ -14,10 +15,13 @@ def record_step(
     decision: str,
     *,
     selected_action: dict[str, Any] | None = None,
+    loop_phase: str | None = None,
 ) -> None:
     step = {
         "step": len(steps) + 1,
         "tool": observation.tool,
+        "loop_contract": LOOP_CONTRACT_VERSION,
+        "loop_phase": loop_phase or loop_phase_for_tool(observation.tool),
         "arguments": dict(arguments),
         "observation": observation.to_dict(),
         "decision": decision,

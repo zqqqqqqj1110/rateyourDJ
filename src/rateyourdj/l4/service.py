@@ -8,7 +8,12 @@ from rateyourdj.l2 import JsonSongStore, SongProfile
 from rateyourdj.l3 import CandidateRetrievalService, RetrievalCandidate
 from rateyourdj.l5 import FeedbackSignalModel
 
-from .models import DIVERSITY_PENALTY_WEIGHT, RankedSong, RankingResult
+from .models import (
+    DIVERSITY_PENALTY_WEIGHT,
+    RankedSong,
+    RankingResult,
+    RankingWeights,
+)
 from .scoring import (
     diversity_similarity,
     ranking_reasons,
@@ -37,6 +42,7 @@ class RecommendationRankingService:
         profile_store: JsonProfileStore,
         song_store: JsonSongStore,
         retrieval_service: CandidateRetrievalService | None = None,
+        ranking_weights: RankingWeights | None = None,
     ) -> None:
         self.profile_store = profile_store
         self.song_store = song_store
@@ -44,6 +50,7 @@ class RecommendationRankingService:
             profile_store,
             song_store,
         )
+        self.ranking_weights = ranking_weights or RankingWeights()
 
     def rank(
         self,
@@ -83,6 +90,7 @@ class RecommendationRankingService:
                 song,
                 candidate,
                 feedback_score=feedback_model.score(song),
+                weights=self.ranking_weights,
             )
             remaining.append(
                 _ScoredCandidate(
@@ -107,13 +115,18 @@ class RecommendationRankingService:
                     continue
                 maximum_similarity = max(
                     (
-                        diversity_similarity(item.song, existing.song)
+                        diversity_similarity(
+                            item.song,
+                            existing.song,
+                            weights=self.ranking_weights,
+                        )
                         for existing, _, _ in selected
                     ),
                     default=0.0,
                 )
                 penalty = round(
-                    DIVERSITY_PENALTY_WEIGHT * maximum_similarity,
+                    self.ranking_weights.diversity_penalty_weight
+                    * maximum_similarity,
                     6,
                 )
                 final_score = round(

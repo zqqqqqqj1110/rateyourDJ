@@ -769,6 +769,24 @@ python -m pip install -e '.[dev]' --no-build-isolation
 PYTHONPATH=src python -m unittest discover -s tests -q
 ```
 
+固定 50 条评测集可单独运行：
+
+```bash
+PYTHONPATH=src python -m rateyourdj.l7.cli run-eval-suite
+```
+
+需要机器可读输出时：
+
+```bash
+PYTHONPATH=src python -m rateyourdj.l7.cli run-eval-suite --json
+```
+
+标准回归入口会先跑 eval suite，再跑完整单测：
+
+```bash
+PYTHONPATH=src python -m rateyourdj.l7.cli run-regression
+```
+
 未重新安装命令入口时：
 
 ```bash

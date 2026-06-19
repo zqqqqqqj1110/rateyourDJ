@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from .errors import AgentLoopError
 from .guards import apply_request_patch
+from .loop_contract import LOOP_CONTRACT_VERSION, loop_phase_for_tool
 from .models import AgentRequest
 from .provider import (
     AgentDecision,
@@ -99,11 +100,19 @@ def execute_model_loop(
             query=request.query,
             request=request.to_dict(),
             session={
+                "schema_version": session.schema_version,
                 "session_id": session.session_id,
                 "turn_count": session.turn_count,
+                "current_intent": session.current_intent,
+                "last_user_query": session.last_user_query,
                 "preference_terms": list(session.preference_terms),
                 "exclude_terms": list(session.exclude_terms),
-                "seen_song_ids": list(session.seen_song_ids),
+                "seen_track_ids": list(session.seen_track_ids),
+                "seed_track_ids": list(session.seed_track_ids),
+                "active_constraints": dict(session.active_constraints),
+                "last_run_id": session.last_run_id,
+                "last_recommendation_ids": list(session.last_recommendation_ids),
+                "temporary_feedback": list(session.temporary_feedback),
             },
             tool_schemas=tool_registry.model_schemas(),
             tool_history=[dict(step) for step in steps],
@@ -231,6 +240,8 @@ def execute_model_loop(
         step = {
             "step": len(steps) + 1,
             "tool": observation.tool,
+            "loop_contract": LOOP_CONTRACT_VERSION,
+            "loop_phase": loop_phase_for_tool(observation.tool),
             "arguments": dict(arguments),
             "observation": observation.to_dict(),
             "decision": decision.summary,
@@ -292,9 +303,7 @@ def execute_model_loop(
             eligible = apply_query_filters(
                 [dict(song) for song in observation.data.get("ranked_songs", [])],
                 request,
-                excluded_song_ids=(
-                    set(session.seen_song_ids) if request.exclude_seen else set()
-                ),
+                session=session,
             )
             if len(eligible) > len(best):
                 best = eligible
@@ -415,6 +424,8 @@ def _run_provider_search(
         {
             "step": len(steps) + 1,
             "tool": observation.tool,
+            "loop_contract": LOOP_CONTRACT_VERSION,
+            "loop_phase": loop_phase_for_tool(observation.tool),
             "arguments": dict(arguments),
             "observation": observation.to_dict(),
             "decision": "search external music provider before local fallback",
@@ -429,9 +440,7 @@ def _run_provider_search(
     return _filter_external_candidates(
         provider_ranked,
         request,
-        excluded_song_ids=(
-            set(session.seen_song_ids) if request.exclude_seen else set()
-        ),
+        session=session,
     )
 
 
@@ -443,17 +452,16 @@ def _filter_ranked_candidates(
     provider_search_available: bool,
     apply_query_filters: QueryFilter,
 ) -> list[dict[str, Any]]:
-    excluded_song_ids = set(session.seen_song_ids) if request.exclude_seen else set()
     if provider_search_available:
         return _filter_external_candidates(
             ranked_songs,
             request,
-            excluded_song_ids=excluded_song_ids,
+            session=session,
         )
     return apply_query_filters(
         ranked_songs,
         request,
-        excluded_song_ids=excluded_song_ids,
+        session=session,
     )
 
 
@@ -461,17 +469,20 @@ def _filter_external_candidates(
     ranked_songs: list[dict[str, Any]],
     request: AgentRequest,
     *,
-    excluded_song_ids: set[str],
+    session: Any,
 ) -> list[dict[str, Any]]:
+    from .session_ranking import build_session_ranking_context
+
+    context = build_session_ranking_context(session, request)
     eligible: list[dict[str, Any]] = []
     artist_counts: dict[str, int] = {}
     for song in ranked_songs:
         song_id = str(song.get("song_id") or "")
-        if not song_id or song_id in excluded_song_ids:
+        if not song_id or song_id in context.excluded_song_ids:
             continue
         if any(
             _external_song_matches(song, term)
-            for term in request.exclude_terms
+            for term in context.exclude_terms
         ):
             continue
         artist = str(song.get("artist") or "").casefold()
@@ -483,7 +494,11 @@ def _filter_external_candidates(
             continue
         if artist:
             artist_counts[artist] = artist_counts.get(artist, 0) + 1
-        eligible.append(song)
+        enriched = dict(song)
+        evidence = dict(enriched.get("evidence") or {})
+        evidence.update(context.evidence())
+        enriched["evidence"] = evidence
+        eligible.append(enriched)
     return eligible
 
 
@@ -519,6 +534,8 @@ def _read_user_memory(
         {
             "step": len(steps) + 1,
             "tool": observation.tool,
+            "loop_contract": LOOP_CONTRACT_VERSION,
+            "loop_phase": loop_phase_for_tool(observation.tool),
             "arguments": {"user_id": user_id},
             "observation": observation.to_dict(),
             "decision": "read user memory before scoring external candidates",

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from rateyourdj.agent_tools import ToolObservation
 from rateyourdj.l1 import JsonProfileStore, inspect_user_profile
@@ -13,6 +16,7 @@ from rateyourdj.l5 import record_feedback_tool
 from rateyourdj.providers import ExternalMusicProvider, TrackQuery
 
 from .agent_tool_schemas import AGENT_TOOL_SCHEMAS
+from .sessions import JsonSessionStore
 
 
 AgentTool = Callable[..., ToolObservation]
@@ -48,6 +52,7 @@ class AgentToolRegistryV1:
 
     def __init__(self) -> None:
         self._tools: dict[str, AgentTool] = {}
+        self._memory_proposals: dict[str, dict[str, Any]] = {}
 
     def register(self, name: str, tool: AgentTool) -> None:
         self._tools[name] = tool
@@ -76,10 +81,14 @@ class AgentToolRegistryV1:
         profile_store: JsonProfileStore,
         song_store: JsonSongStore,
         music_provider: ExternalMusicProvider | None = None,
+        session_store: JsonSessionStore | None = None,
     ) -> AgentToolRegistryV1:
         registry = cls()
         profile_dir = profile_store.root
         song_dir = song_store.root
+        resolved_session_store = session_store or JsonSessionStore(
+            profile_dir.parent / "sessions"
+        )
 
         if music_provider is not None:
             registry.register(
@@ -101,6 +110,28 @@ class AgentToolRegistryV1:
             ),
         )
         registry.register(
+            "get_session_memory",
+            lambda **arguments: _get_session_memory(
+                session_store=resolved_session_store,
+                **arguments,
+            ),
+        )
+        registry.register(
+            "update_session_memory",
+            lambda **arguments: _update_session_memory(
+                session_store=resolved_session_store,
+                **arguments,
+            ),
+        )
+        registry.register(
+            "propose_memory_update",
+            lambda **arguments: registry._propose_memory_update(**arguments),
+        )
+        registry.register(
+            "commit_memory_update",
+            lambda **arguments: registry._commit_memory_update(**arguments),
+        )
+        registry.register(
             "L1.inspect_user_profile",
             lambda **arguments: _as_v1_observation(
                 inspect_user_profile(
@@ -115,6 +146,13 @@ class AgentToolRegistryV1:
             lambda **arguments: _get_track_metadata(
                 song_dir=song_dir,
                 music_provider=music_provider,
+                **arguments,
+            ),
+        )
+        registry.register(
+            "get_artist_profile",
+            lambda **arguments: _get_artist_profile(
+                song_store=song_store,
                 **arguments,
             ),
         )
@@ -172,7 +210,227 @@ class AgentToolRegistryV1:
                 **arguments,
             ),
         )
+        registry.register(
+            "explain_recommendations",
+            lambda **arguments: _explain_recommendations(**arguments),
+        )
+        registry.register(
+            "save_to_collection",
+            lambda **arguments: _save_to_collection(
+                profile_store=profile_store,
+                **arguments,
+            ),
+        )
         return registry
+
+    def _propose_memory_update(
+        self,
+        *,
+        user_id: str,
+        source: str,
+        proposal: dict[str, Any],
+    ) -> ToolObservation:
+        proposal_id = "memory_proposal_" + uuid4().hex
+        confidence = _safe_float(proposal.get("confidence"), default=0.0)
+        accepted = (
+            source in {"user_statement", "feedback_pattern", "collection_import"}
+            and bool(str(proposal.get("field", "")).strip())
+            and bool(str(proposal.get("value", "")).strip())
+            and confidence >= 0.5
+        )
+        stored = {
+            "proposal_id": proposal_id,
+            "user_id": user_id,
+            "source": source,
+            "proposal": dict(proposal),
+            "accepted_by_policy": accepted,
+            "created_at": _now(),
+        }
+        self._memory_proposals[proposal_id] = stored
+        return ToolObservation(
+            tool="propose_memory_update",
+            status="ok" if accepted else "partial",
+            data={
+                "proposal_id": proposal_id,
+                "accepted_by_policy": accepted,
+                "requires_user_confirmation": source == "user_statement",
+                "reason": (
+                    "Proposal passed minimum durable-memory policy."
+                    if accepted
+                    else "Proposal was stored but did not meet commit policy."
+                ),
+            },
+            diagnostics=[] if accepted else ["memory proposal confidence is low"],
+            retryable=not accepted,
+            suggested_actions=[],
+        )
+
+    def _commit_memory_update(
+        self,
+        *,
+        user_id: str,
+        proposal_id: str,
+        run_id: str,
+    ) -> ToolObservation:
+        proposal = self._memory_proposals.get(proposal_id)
+        if proposal is None or proposal.get("user_id") != user_id:
+            return ToolObservation(
+                tool="commit_memory_update",
+                status="empty",
+                data={
+                    "user_id": user_id,
+                    "committed": False,
+                    "memory_updates": [],
+                },
+                diagnostics=["memory proposal was not found for this user"],
+                retryable=False,
+                suggested_actions=[],
+            )
+        if not proposal.get("accepted_by_policy"):
+            return ToolObservation(
+                tool="commit_memory_update",
+                status="partial",
+                data={
+                    "user_id": user_id,
+                    "committed": False,
+                    "memory_updates": [],
+                },
+                diagnostics=["memory proposal did not pass policy"],
+                retryable=False,
+                suggested_actions=[],
+            )
+        payload = dict(proposal["proposal"])
+        return ToolObservation(
+            tool="commit_memory_update",
+            status="ok",
+            data={
+                "user_id": user_id,
+                "committed": True,
+                "run_id": run_id,
+                "memory_updates": [
+                    {
+                        "scope": "long_term",
+                        "field": payload.get("field"),
+                        "value": payload.get("value"),
+                        "delta": payload.get("delta", 0.0),
+                        "summary": payload.get("reason", ""),
+                    }
+                ],
+            },
+            diagnostics=[],
+            retryable=False,
+            suggested_actions=[],
+        )
+
+
+def _get_session_memory(
+    *,
+    session_store: JsonSessionStore,
+    user_id: str,
+    session_id: str,
+) -> ToolObservation:
+    session = session_store.load_or_create(user_id, session_id)
+    return ToolObservation(
+        tool="get_session_memory",
+        status="ok",
+        data=_session_memory_data(session),
+        diagnostics=[],
+        retryable=False,
+        suggested_actions=[],
+    )
+
+
+def _update_session_memory(
+    *,
+    session_store: JsonSessionStore,
+    user_id: str,
+    session_id: str,
+    patch: dict[str, Any],
+) -> ToolObservation:
+    session = session_store.load_or_create(user_id, session_id)
+    updated_fields: list[str] = []
+    if "current_intent" in patch:
+        session.current_intent = str(patch["current_intent"]).strip() or "recommend"
+        updated_fields.append("current_intent")
+    if "last_user_query" in patch:
+        last_user_query = str(patch["last_user_query"]).strip()
+        session.last_user_query = last_user_query or None
+        updated_fields.append("last_user_query")
+    if "preference_terms" in patch:
+        session.preference_terms = _string_list(patch["preference_terms"])
+        updated_fields.append("preference_terms")
+    if "exclude_terms" in patch:
+        session.exclude_terms = _string_list(patch["exclude_terms"])
+        updated_fields.append("exclude_terms")
+    if "seen_track_ids" in patch:
+        session.seen_song_ids = _string_list(patch["seen_track_ids"])
+        updated_fields.append("seen_track_ids")
+    if "seed_track_ids" in patch:
+        session.seed_track_ids = _string_list(patch["seed_track_ids"])
+        updated_fields.append("seed_track_ids")
+    if "last_run_id" in patch:
+        session.last_trajectory_id = str(patch["last_run_id"])
+        updated_fields.append("last_run_id")
+    if "last_recommendation_ids" in patch:
+        session.last_recommendation_ids = _string_list(
+            patch["last_recommendation_ids"]
+        )
+        updated_fields.append("last_recommendation_ids")
+    if "temporary_feedback" in patch and isinstance(patch["temporary_feedback"], list):
+        session.temporary_feedback = [
+            dict(item)
+            for item in patch["temporary_feedback"]
+            if isinstance(item, dict)
+        ]
+        updated_fields.append("temporary_feedback")
+    active_constraints = patch.get("active_constraints")
+    if isinstance(active_constraints, dict):
+        session.active_constraints.update(dict(active_constraints))
+        updated_fields.append("active_constraints")
+    session_store.save(session)
+    return ToolObservation(
+        tool="update_session_memory",
+        status="ok",
+        data={
+            "session_id": session.session_id,
+            "updated_fields": updated_fields,
+            "memory_updates": [
+                {
+                    "scope": "session",
+                    "type": field,
+                    "summary": f"Updated session field {field}.",
+                }
+                for field in updated_fields
+            ],
+        },
+        diagnostics=[],
+        retryable=False,
+        suggested_actions=[],
+    )
+
+
+def _session_memory_data(session: Any) -> dict[str, Any]:
+    data = asdict(session)
+    return {
+        "schema_version": data["schema_version"],
+        "session_id": data["session_id"],
+        "user_id": data["user_id"],
+        "turn_count": data["turn_count"],
+        "current_intent": data.get("current_intent", "recommend"),
+        "last_user_query": data.get("last_user_query"),
+        "active_constraints": dict(data.get("active_constraints", {})),
+        "preference_terms": list(data.get("preference_terms", [])),
+        "exclude_terms": list(data.get("exclude_terms", [])),
+        "seen_track_ids": list(data.get("seen_track_ids", [])),
+        "seed_track_ids": list(data.get("seed_track_ids", [])),
+        "last_run_id": data.get("last_run_id"),
+        "last_recommendation_ids": list(
+            data.get("last_recommendation_ids", [])
+        ),
+        "temporary_feedback": list(data.get("temporary_feedback", [])),
+        "created_at": data.get("created_at"),
+        "updated_at": data.get("updated_at"),
+    }
 
 
 def _get_track_metadata(
@@ -268,6 +526,87 @@ def _get_track_metadata(
             for observation in observations
             for action in observation.suggested_actions
         ),
+    )
+
+
+def _get_artist_profile(
+    *,
+    song_store: JsonSongStore,
+    artist_ids: list[str] | None = None,
+    artist_names: list[str] | None = None,
+) -> ToolObservation:
+    requested_ids = _string_list(artist_ids or [])
+    requested_names = _string_list(artist_names or [])
+    if not requested_ids and not requested_names:
+        return ToolObservation(
+            tool="get_artist_profile",
+            status="empty",
+            data={"artists": [], "missing": []},
+            diagnostics=["artist_ids or artist_names is required"],
+            retryable=False,
+            suggested_actions=[],
+        )
+
+    requested_name_keys = {_normalize_label(name) for name in requested_names}
+    artists: dict[str, dict[str, Any]] = {}
+    for path in song_store.root.glob("*.json"):
+        try:
+            song = song_store.load(path.stem)
+        except Exception:
+            continue
+        artist = str(song.metadata.get("artist") or "").strip()
+        if not artist:
+            continue
+        key = _normalize_label(artist)
+        if requested_name_keys and key not in requested_name_keys:
+            continue
+        profile = artists.setdefault(
+            key,
+            {
+                "artist_id": None,
+                "name": artist,
+                "genres": {},
+                "tags": {},
+                "historical_context": [],
+                "provider": "local_cache",
+                "track_count": 0,
+            },
+        )
+        profile["track_count"] += 1
+        for genre, score in song.genres.items():
+            profile["genres"][genre] = max(
+                float(score),
+                float(profile["genres"].get(genre, 0.0)),
+            )
+        for tag_map in song.source_tags.values():
+            for tag, score in tag_map.items():
+                profile["tags"][tag] = max(
+                    float(score),
+                    float(profile["tags"].get(tag, 0.0)),
+                )
+
+    missing = [
+        name
+        for name in requested_names
+        if _normalize_label(name) not in artists
+    ]
+    missing.extend(requested_ids)
+    data_artists = []
+    for profile in artists.values():
+        data_artists.append(
+            {
+                **profile,
+                "genres": sorted(profile["genres"]),
+                "tags": dict(sorted(profile["tags"].items())),
+            }
+        )
+    return ToolObservation(
+        tool="get_artist_profile",
+        status="ok" if data_artists else "empty",
+        data={"artists": data_artists, "missing": missing},
+        diagnostics=[],
+        retryable=not data_artists,
+        suggested_actions=[],
     )
 
 
@@ -412,6 +751,114 @@ def _record_feedback(
     )
 
 
+def _explain_recommendations(
+    *,
+    user_id: str,
+    message: str,
+    ranked_tracks: list[dict[str, Any]],
+    session_id: str | None = None,
+    style: str = "balanced",
+) -> ToolObservation:
+    recommendations = []
+    for track in ranked_tracks:
+        track_id = str(
+            track.get("track_id") or track.get("song_id") or ""
+        ).strip()
+        reasons = []
+        ranking_reasons = track.get("ranking_reasons")
+        if isinstance(ranking_reasons, list):
+            for reason in ranking_reasons[:3]:
+                if isinstance(reason, str) and reason.strip():
+                    reasons.append(
+                        {
+                            "type": "ranking_evidence",
+                            "label": "推荐依据",
+                            "text": reason.strip(),
+                        }
+                    )
+        evidence = track.get("evidence")
+        if isinstance(evidence, dict):
+            matched = evidence.get("matched_preferences")
+            if isinstance(matched, list) and matched:
+                reasons.append(
+                    {
+                        "type": "memory_match",
+                        "label": "符合偏好",
+                        "text": "匹配你的偏好：" + "、".join(map(str, matched[:3])),
+                    }
+                )
+        if not reasons:
+            title = track.get("title") or track_id or "这首歌"
+            reasons.append(
+                {
+                    "type": "session_intent",
+                    "label": "符合本次请求",
+                    "text": f"{title} 符合这次的推荐条件。",
+                }
+            )
+        recommendations.append(
+            {
+                "track_id": track_id,
+                "song_id": track.get("song_id"),
+                "reasons": reasons[:1] if style == "short" else reasons,
+            }
+        )
+    return ToolObservation(
+        tool="explain_recommendations",
+        status="ok" if recommendations else "empty",
+        data={
+            "user_id": user_id,
+            "session_id": session_id,
+            "message": message,
+            "recommendations": recommendations,
+        },
+        diagnostics=[],
+        retryable=False,
+        suggested_actions=[],
+    )
+
+
+def _save_to_collection(
+    *,
+    profile_store: JsonProfileStore,
+    user_id: str,
+    track_id: str,
+    source: str,
+    run_id: str | None = None,
+) -> ToolObservation:
+    def updater(profile: Any) -> Any:
+        if track_id not in profile.collection_song_ids:
+            profile.collection_song_ids = [
+                *profile.collection_song_ids,
+                track_id,
+            ]
+        return profile
+
+    profile = profile_store.update(user_id, updater)
+    return ToolObservation(
+        tool="save_to_collection",
+        status="ok",
+        data={
+            "user_id": user_id,
+            "track_id": track_id,
+            "saved": track_id in profile.collection_song_ids,
+            "source": source,
+            "run_id": run_id,
+            "collection_count": len(profile.collection_song_ids),
+            "memory_updates": [
+                {
+                    "scope": "collection",
+                    "type": "saved_track",
+                    "summary": f"Saved {track_id} to the user's collection.",
+                }
+            ],
+        },
+        diagnostics=[],
+        retryable=False,
+        suggested_actions=[],
+    )
+
+
 def _as_v1_observation(
     observation: ToolObservation,
     tool_name: str,
@@ -437,3 +884,27 @@ def _map_suggested_actions(
             mapped["tool"] = LEGACY_TOOL_NAME_MAP.get(tool, tool)
         result.append(mapped)
     return result
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _safe_float(value: Any, *, default: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip() and item.strip() not in result:
+            result.append(item.strip())
+    return result
+
+
+def _normalize_label(value: str) -> str:
+    return " ".join(value.casefold().split())

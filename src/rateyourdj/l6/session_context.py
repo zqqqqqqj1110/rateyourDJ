@@ -11,15 +11,17 @@ def request_with_session_context(
 ) -> AgentRequest:
     if request.intent != "more":
         return request
+    active_constraints = session.active_constraints
     top_k = (
         request.top_k
         if query_has_explicit_count(request.query)
-        else session.last_top_k or request.top_k
+        else _constraint_int(active_constraints, "limit") or request.top_k
     )
     max_per_artist = (
         request.max_per_artist
         if query_requests_artist_diversity(request.query)
-        else session.last_max_per_artist or request.max_per_artist
+        else _constraint_int(active_constraints, "max_per_artist")
+        or request.max_per_artist
     )
     return AgentRequest(
         query=request.query,
@@ -28,7 +30,7 @@ def request_with_session_context(
         min_retrieval_score=(
             request.min_retrieval_score
             if request.min_retrieval_score > 0
-            else session.last_min_retrieval_score
+            else _constraint_float(active_constraints, "min_retrieval_score")
             or request.min_retrieval_score
         ),
         preference_terms=(
@@ -56,3 +58,20 @@ def query_requests_artist_diversity(query: str) -> bool:
             "per artist",
         )
     )
+
+
+def _constraint_int(constraints: dict[str, object], field_name: str) -> int | None:
+    value = constraints.get(field_name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _constraint_float(
+    constraints: dict[str, object],
+    field_name: str,
+) -> float | None:
+    value = constraints.get(field_name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)

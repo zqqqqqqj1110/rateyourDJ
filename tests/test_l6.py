@@ -12,17 +12,27 @@ from rateyourdj.l1 import JsonProfileStore, UserProfile
 from rateyourdj.l2 import JsonSongStore, SongProfile
 from rateyourdj.l4 import RecommendationRankingService
 from rateyourdj.l6 import (
+    AGENT_TOOL_SCHEMA_VERSION,
     AgentDecision,
+    AgentSession,
+    AgentTrajectory,
     AgentToolRegistryV1,
     AgentToolRegistry,
     JsonSessionStore,
     JsonTrajectoryStore,
     LLMProviderError,
     LLMResponseError,
+    LOOP_CONTRACT_VERSION,
     MockLLMProvider,
     RecommendationAgentService,
+    TRAJECTORY_SCHEMA_VERSION,
     agent_schema,
     parse_agent_request,
+    recommendation_loop_plan,
+)
+from rateyourdj.l6.session_ranking import (
+    SESSION_MEMORY_RANKING_FIELDS,
+    build_session_ranking_context,
 )
 from rateyourdj.providers import (
     ExternalMusicProvider,
@@ -115,6 +125,65 @@ class AgentParserTests(unittest.TestCase):
             parse_agent_request(" ")
 
 
+class RecommendationLoopContractTests(unittest.TestCase):
+    def test_plan_exposes_stable_v1_phases(self) -> None:
+        plan = recommendation_loop_plan()
+
+        self.assertEqual(
+            [item["phase"] for item in plan],
+            [
+                "memory_read",
+                "query_understanding",
+                "external_search",
+                "candidate_enrichment",
+                "candidate_ranking",
+                "retrieval_diagnostics",
+                "explanation",
+                "trajectory_write",
+                "feedback_write",
+            ],
+        )
+        self.assertIn("get_user_memory", plan[0]["allowed_tools"])
+        self.assertIn("search_tracks", plan[2]["allowed_tools"])
+        self.assertIn("rank_candidates", plan[4]["allowed_tools"])
+
+    def test_session_ranking_context_exposes_only_explicit_session_fields(self) -> None:
+        session = AgentSession(
+            schema_version=1,
+            session_id="session-ranking-test",
+            user_id="user-1",
+            preference_terms=["rock"],
+            exclude_terms=["artist b"],
+            seen_track_ids=["rock-a"],
+            seed_track_ids=["seed"],
+            active_constraints={
+                "exclude_seen": True,
+                "limit": 1,
+                "max_per_artist": 1,
+            },
+            temporary_feedback=[
+                {"track_id": "rock-b", "event": "skipped"},
+                {"track_id": "seed", "event": "liked"},
+            ],
+        )
+        request = parse_agent_request("推荐一首摇滚")
+
+        context = build_session_ranking_context(
+            session,
+            request,
+        )
+
+        self.assertEqual(
+            context.ranking_fields,
+            SESSION_MEMORY_RANKING_FIELDS,
+        )
+        self.assertEqual(context.preference_terms, ["rock"])
+        self.assertEqual(context.exclude_terms, ["artist b"])
+        self.assertEqual(context.seed_track_ids, ["seed"])
+        self.assertEqual(context.excluded_song_ids, {"rock-a", "rock-b"})
+        self.assertTrue(context.active_constraints["exclude_seen"])
+
+
 class RecommendationAgentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -171,13 +240,85 @@ class RecommendationAgentTests(unittest.TestCase):
         )
         self.assertEqual(trajectory.query, response.query)
         self.assertEqual(
+            [item["phase"] for item in trajectory.plan[:2]],
+            ["memory_read", "query_understanding"],
+        )
+        plan_by_phase = {
+            item["phase"]: item for item in trajectory.plan
+        }
+        self.assertEqual(plan_by_phase["memory_read"]["status"], "completed")
+        self.assertEqual(
+            plan_by_phase["query_understanding"]["status"],
+            "completed",
+        )
+        self.assertEqual(
+            plan_by_phase["candidate_ranking"]["status"],
+            "completed",
+        )
+        self.assertEqual(plan_by_phase["explanation"]["status"], "completed")
+        self.assertEqual(
+            plan_by_phase["trajectory_write"]["status"],
+            "completed",
+        )
+        self.assertEqual(plan_by_phase["feedback_write"]["status"], "pending")
+        self.assertEqual(
+            plan_by_phase["candidate_ranking"]["session_memory_reads"],
+            list(SESSION_MEMORY_RANKING_FIELDS),
+        )
+        self.assertIn(
+            "seen_track_ids",
+            plan_by_phase["trajectory_write"]["session_memory_writes"],
+        )
+        self.assertEqual(
             [call["tool"] for call in trajectory.tool_calls[:2]],
             ["L1.inspect_user_profile", "L4.rank_candidates"],
+        )
+        self.assertEqual(
+            [call["loop_phase"] for call in trajectory.tool_calls[:2]],
+            ["memory_read", "candidate_ranking"],
+        )
+        self.assertTrue(
+            all(
+                call["loop_contract"] == LOOP_CONTRACT_VERSION
+                for call in trajectory.tool_calls
+            )
+        )
+        self.assertEqual(
+            trajectory.trajectory_schema_version,
+            TRAJECTORY_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            trajectory.loop_contract_version,
+            LOOP_CONTRACT_VERSION,
+        )
+        self.assertEqual(
+            trajectory.tool_schema_version,
+            AGENT_TOOL_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            trajectory.user_memory_snapshot["collection_song_ids"],
+            ["seed"],
+        )
+        self.assertEqual(
+            trajectory.session_memory_snapshot["last_user_query"],
+            response.query,
+        )
+        self.assertEqual(
+            trajectory.retrieval_snapshot["seed_song_ids"],
+            ["seed"],
         )
         self.assertEqual(trajectory.stop_reason, "insufficient_candidates")
         self.assertTrue(trajectory.plan)
         self.assertEqual(
             trajectory.recommendations[0]["song_id"],
+            "rock-a",
+        )
+        self.assertEqual(
+            trajectory.ranked_candidates[0]["song_id"],
+            "rock-a",
+        )
+        self.assertEqual(
+            trajectory.final_recommendations[0]["song_id"],
             "rock-a",
         )
 
@@ -188,6 +329,47 @@ class RecommendationAgentTests(unittest.TestCase):
             "rock-b",
             [song["song_id"] for song in response.ranked_songs],
         )
+
+    def test_trajectory_from_dict_migrates_old_payload_to_v1_contract(self) -> None:
+        legacy_payload = {
+            "trajectory_id": "trajectory-1",
+            "session_id": "session-1",
+            "turn_index": 1,
+            "user_id": "user-1",
+            "query": "推荐一首摇滚",
+            "parsed_request": {"top_k": 1},
+            "plan": [],
+            "tool_calls": [],
+            "recommendations": [{"song_id": "rock-a"}],
+            "response_text": "完成推荐",
+            "feedback_events": [],
+            "stop_reason": "goal_satisfied",
+            "agent_mode": "rules",
+            "provider": None,
+            "fallback_reason": None,
+            "agent_decisions": [],
+            "created_at": "2026-06-19T00:00:00+00:00",
+        }
+
+        trajectory = AgentTrajectory.from_dict(legacy_payload)
+
+        self.assertEqual(
+            trajectory.trajectory_schema_version,
+            TRAJECTORY_SCHEMA_VERSION,
+        )
+        self.assertEqual(trajectory.user_memory_snapshot, {})
+        self.assertEqual(trajectory.session_memory_snapshot, {})
+        self.assertEqual(trajectory.retrieval_snapshot, {})
+        self.assertEqual(
+            trajectory.ranked_candidates,
+            [{"song_id": "rock-a"}],
+        )
+        self.assertEqual(
+            trajectory.final_recommendations,
+            [{"song_id": "rock-a"}],
+        )
+        self.assertEqual(trajectory.feedback_contexts, [])
+        self.assertEqual(trajectory.collection_writes, [])
 
     def test_mock_model_drives_tools_and_program_enforces_exclusion(self) -> None:
         provider = MockLLMProvider(
@@ -395,6 +577,15 @@ class RecommendationAgentTests(unittest.TestCase):
         self.assertEqual(
             [song["song_id"] for song in response.ranked_songs],
             ["spotify:track:new"],
+        )
+        trajectory = self.trajectory_store.load("user-1", response.trajectory_id)
+        plan_by_phase = {
+            item["phase"]: item for item in trajectory.plan
+        }
+        self.assertEqual(plan_by_phase["external_search"]["status"], "completed")
+        self.assertEqual(
+            plan_by_phase["candidate_ranking"]["status"],
+            "skipped",
         )
 
     def test_external_provider_search_does_not_require_local_tags(self) -> None:
@@ -1028,9 +1219,47 @@ class RecommendationAgentTests(unittest.TestCase):
         self.assertEqual(second.parsed_request.max_per_artist, 1)
         self.assertEqual(second.parsed_request.preference_terms, ["rock"])
         self.assertEqual(second.parsed_request.exclude_terms, [])
+        session = self.service.session_store.load_or_create(
+            "user-1",
+            first.session_id,
+        )
+        self.assertEqual(session.current_intent, "more")
+        self.assertEqual(session.last_user_query, "换一批，不要刚才推荐过的歌曲")
+        self.assertTrue(session.active_constraints["exclude_seen"])
+        self.assertEqual(
+            session.last_recommendation_ids,
+            [song["song_id"] for song in second.ranked_songs],
+        )
         self.assertNotEqual(
             first.ranked_songs[0]["song_id"],
             second.ranked_songs[0]["song_id"],
+        )
+
+    def test_temporary_feedback_excludes_skipped_track_from_next_turn(self) -> None:
+        first = self.service.recommend("user-1", "推荐一首摇滚")
+        skipped_song_id = first.ranked_songs[0]["song_id"]
+        self.service.session_store.load_or_create("user-1", first.session_id)
+        self.service.model_tool_registry.call(
+            "update_session_memory",
+            user_id="user-1",
+            session_id=first.session_id,
+            patch={
+                "temporary_feedback": [
+                    {"track_id": skipped_song_id, "event": "skipped"}
+                ]
+            },
+        )
+
+        second = self.service.recommend(
+            "user-1",
+            "推荐一首摇滚",
+            session_id=first.session_id,
+        )
+
+        self.assertNotEqual(second.ranked_songs[0]["song_id"], skipped_song_id)
+        self.assertEqual(
+            second.ranked_songs[0]["evidence"]["temporary_feedback_events"],
+            ["skipped"],
         )
 
     def test_old_session_removes_seen_song_reference_exclusion(self) -> None:
@@ -1064,6 +1293,27 @@ class RecommendationAgentTests(unittest.TestCase):
 
         self.assertEqual(session.exclude_terms, ["pink floyd"])
         self.assertIsNone(session.last_top_k)
+        self.assertEqual(session.seen_track_ids, ["rock-a"])
+        self.assertEqual(session.schema_version, 1)
+
+    def test_new_session_persists_v1_short_term_memory_shape(self) -> None:
+        response = self.service.recommend("user-1", "推荐一首摇滚")
+
+        session = self.service.session_store.load_or_create(
+            "user-1",
+            response.session_id,
+        )
+
+        self.assertEqual(session.schema_version, 1)
+        self.assertEqual(session.current_intent, "recommend")
+        self.assertEqual(session.last_user_query, "推荐一首摇滚")
+        self.assertEqual(session.preference_terms, ["rock"])
+        self.assertEqual(
+            session.last_recommendation_ids,
+            [song["song_id"] for song in response.ranked_songs],
+        )
+        self.assertEqual(session.last_run_id, response.trajectory_id)
+        self.assertTrue(session.created_at)
 
     def test_insufficient_candidates_retries_and_records_diagnostics(self) -> None:
         response = self.service.recommend("user-1", "推荐五首摇滚")
@@ -1214,6 +1464,68 @@ class RecommendationAgentTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
         self.assertEqual(len(trajectory.feedback_events), 10)
+        self.assertEqual(len(trajectory.feedback_contexts), 10)
+        self.assertEqual(trajectory.collection_writes, [])
+        self.assertEqual(
+            trajectory.feedback_contexts[0]["feedback_type"],
+            "like",
+        )
+        self.assertEqual(
+            trajectory.feedback_contexts[0]["trajectory_id"],
+            response.trajectory_id,
+        )
+
+    def test_trajectory_store_records_collection_write_from_favorite_feedback(self) -> None:
+        response = self.service.recommend("user-1", "推荐一首摇滚")
+
+        self.trajectory_store.append_feedback(
+            "user-1",
+            response.trajectory_id,
+            {
+                "feedback_type": "favorite",
+                "song_id": "rock-a",
+                "timestamp": "2026-06-11T00:00:00+00:00",
+                "reward_score": 0.8,
+                "recommendation_context": {
+                    "trajectory_id": response.trajectory_id,
+                    "rank": 1,
+                    "final_score": 0.6,
+                    "source": "web",
+                    "track": {
+                        "title": "rock-a",
+                        "artist": "Artist A",
+                    },
+                },
+            },
+        )
+
+        trajectory = self.trajectory_store.load(
+            "user-1",
+            response.trajectory_id,
+        )
+        self.assertEqual(len(trajectory.feedback_events), 1)
+        self.assertEqual(len(trajectory.feedback_contexts), 1)
+        self.assertEqual(len(trajectory.collection_writes), 1)
+        self.assertEqual(
+            trajectory.feedback_contexts[0]["recommendation_rank"],
+            1,
+        )
+        self.assertEqual(
+            trajectory.feedback_contexts[0]["feedback_source"],
+            "web",
+        )
+        self.assertEqual(
+            trajectory.collection_writes[0]["action"],
+            "add_track",
+        )
+        self.assertEqual(
+            trajectory.collection_writes[0]["feedback_type"],
+            "favorite",
+        )
+        self.assertEqual(
+            trajectory.collection_writes[0]["track"]["artist"],
+            "Artist A",
+        )
 
 
 class L6CliTests(unittest.TestCase):

@@ -5,6 +5,7 @@ from typing import Any, Protocol
 from .models import AgentRequest
 from .runtime import record_step, select_suggested_action
 from .sessions import AgentSession
+from .loop_contract import LOOP_CONTRACT_VERSION, loop_phase_for_tool
 
 
 class ToolRegistry(Protocol):
@@ -21,7 +22,7 @@ class QueryFilter(Protocol):
         ranked_songs: list[dict[str, Any]],
         request: AgentRequest,
         *,
-        excluded_song_ids: set[str],
+        session: AgentSession,
     ) -> list[dict[str, Any]]:
         ...
 
@@ -48,6 +49,8 @@ def guarded_model_ranking(
         {
             "step": len(steps) + 1,
             "tool": observation.tool,
+            "loop_contract": LOOP_CONTRACT_VERSION,
+            "loop_phase": loop_phase_for_tool(observation.tool),
             "arguments": dict(arguments),
             "observation": observation.to_dict(),
             "decision": (
@@ -59,9 +62,7 @@ def guarded_model_ranking(
     eligible = apply_query_filters(
         [dict(song) for song in observation.data.get("ranked_songs", [])],
         request,
-        excluded_song_ids=(
-            set(session.seen_song_ids) if request.exclude_seen else set()
-        ),
+        session=session,
     )
     return (
         eligible,
@@ -107,9 +108,7 @@ def execute_ranking_loop(
         filtered = apply_query_filters(
             [dict(song) for song in data.get("ranked_songs", [])],
             request,
-            excluded_song_ids=(
-                set(session.seen_song_ids) if request.exclude_seen else set()
-            ),
+            session=session,
         )
         if len(filtered) > len(best):
             best = filtered

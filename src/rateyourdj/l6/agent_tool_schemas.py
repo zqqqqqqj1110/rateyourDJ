@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 
+AGENT_TOOL_SCHEMA_VERSION = "agent_tool_schema_v1"
+
+
 AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -34,6 +37,110 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "update_session_memory",
+        "description": (
+            "Update short-term session state without mutating durable user "
+            "memory."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "session_id": {"type": "string"},
+                "patch": {
+                    "type": "object",
+                    "properties": {
+                        "current_intent": {"type": "string"},
+                        "last_user_query": {"type": "string"},
+                        "active_constraints": {"type": "object"},
+                        "preference_terms": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "exclude_terms": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "seen_track_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "seed_track_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "last_run_id": {"type": "string"},
+                        "last_recommendation_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "temporary_feedback": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["user_id", "session_id", "patch"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "propose_memory_update",
+        "description": (
+            "Create a policy-checked durable memory update proposal without "
+            "committing it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "source": {
+                    "type": "string",
+                    "enum": [
+                        "user_statement",
+                        "feedback_pattern",
+                        "collection_import",
+                    ],
+                },
+                "proposal": {
+                    "type": "object",
+                    "properties": {
+                        "field": {"type": "string"},
+                        "value": {"type": "string"},
+                        "delta": {"type": "number"},
+                        "confidence": {"type": "number"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["field", "value", "confidence", "reason"],
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["user_id", "source", "proposal"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "commit_memory_update",
+        "description": (
+            "Commit a durable memory update proposal after policy validation."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "proposal_id": {"type": "string"},
+                "run_id": {"type": "string"},
+            },
+            "required": ["user_id", "proposal_id", "run_id"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "search_tracks",
         "description": (
             "Search music providers for recommendation candidates. This is the "
@@ -43,7 +150,7 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
                 "market": {"type": "string"},
                 "providers": {
                     "type": "array",
@@ -59,6 +166,30 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_artist_profile",
+        "description": (
+            "Read artist-level context for candidate ranking and explanations."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "artist_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 25,
+                },
+                "artist_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 25,
+                },
+            },
             "additionalProperties": False,
         },
     },

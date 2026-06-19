@@ -8,6 +8,7 @@ import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 
@@ -17,17 +18,64 @@ def _now() -> str:
 
 @dataclass(slots=True)
 class AgentSession:
+    schema_version: int
     session_id: str
     user_id: str
     turn_count: int = 0
+    current_intent: str = "recommend"
+    last_user_query: str | None = None
     preference_terms: list[str] = field(default_factory=list)
     exclude_terms: list[str] = field(default_factory=list)
-    seen_song_ids: list[str] = field(default_factory=list)
-    last_top_k: int | None = None
-    last_max_per_artist: int | None = None
-    last_min_retrieval_score: float | None = None
-    last_trajectory_id: str | None = None
+    seen_track_ids: list[str] = field(default_factory=list)
+    seed_track_ids: list[str] = field(default_factory=list)
+    active_constraints: dict[str, Any] = field(default_factory=dict)
+    last_run_id: str | None = None
+    last_recommendation_ids: list[str] = field(default_factory=list)
+    temporary_feedback: list[dict[str, Any]] = field(default_factory=list)
+    created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+
+    @property
+    def seen_song_ids(self) -> list[str]:
+        return self.seen_track_ids
+
+    @seen_song_ids.setter
+    def seen_song_ids(self, value: list[str]) -> None:
+        self.seen_track_ids = value
+
+    @property
+    def last_top_k(self) -> int | None:
+        return _optional_int(self.active_constraints.get("limit"))
+
+    @last_top_k.setter
+    def last_top_k(self, value: int | None) -> None:
+        _set_constraint(self.active_constraints, "limit", value)
+
+    @property
+    def last_max_per_artist(self) -> int | None:
+        return _optional_int(self.active_constraints.get("max_per_artist"))
+
+    @last_max_per_artist.setter
+    def last_max_per_artist(self, value: int | None) -> None:
+        _set_constraint(self.active_constraints, "max_per_artist", value)
+
+    @property
+    def last_min_retrieval_score(self) -> float | None:
+        return _optional_float(
+            self.active_constraints.get("min_retrieval_score")
+        )
+
+    @last_min_retrieval_score.setter
+    def last_min_retrieval_score(self, value: float | None) -> None:
+        _set_constraint(self.active_constraints, "min_retrieval_score", value)
+
+    @property
+    def last_trajectory_id(self) -> str | None:
+        return self.last_run_id
+
+    @last_trajectory_id.setter
+    def last_trajectory_id(self, value: str | None) -> None:
+        self.last_run_id = value
 
 
 class JsonSessionStore:
@@ -46,6 +94,7 @@ class JsonSessionStore:
             path = self._path_for(resolved_id)
             if not path.exists():
                 session = AgentSession(
+                    schema_version=1,
                     session_id=resolved_id,
                     user_id=user_id,
                 )
@@ -53,12 +102,7 @@ class JsonSessionStore:
                 return session
             with path.open("r", encoding="utf-8") as file:
                 value = json.load(file)
-            value["exclude_terms"] = [
-                term
-                for term in value.get("exclude_terms", [])
-                if not _is_seen_song_reference(str(term))
-            ]
-            session = AgentSession(**value)
+            session = AgentSession(**_migrate_session_payload(value))
             if session.user_id != user_id:
                 raise ValueError("session does not belong to this user")
             return session
@@ -125,3 +169,112 @@ def _is_seen_song_reference(term: str) -> bool:
             "shown before",
         )
     )
+
+
+def _migrate_session_payload(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("session payload must be an object")
+    exclude_terms = [
+        str(term).strip()
+        for term in value.get("exclude_terms", [])
+        if isinstance(term, str)
+        and str(term).strip()
+        and not _is_seen_song_reference(str(term))
+    ]
+    active_constraints = value.get("active_constraints")
+    if not isinstance(active_constraints, dict):
+        active_constraints = {}
+    active_constraints = dict(active_constraints)
+    _merge_legacy_constraint(active_constraints, "limit", value.get("last_top_k"))
+    _merge_legacy_constraint(
+        active_constraints,
+        "max_per_artist",
+        value.get("last_max_per_artist"),
+    )
+    _merge_legacy_constraint(
+        active_constraints,
+        "min_retrieval_score",
+        value.get("last_min_retrieval_score"),
+    )
+    if value.get("seen_song_ids") and not value.get("seen_track_ids"):
+        seen_track_ids = value.get("seen_song_ids", [])
+    else:
+        seen_track_ids = value.get("seen_track_ids", [])
+    return {
+        "schema_version": int(value.get("schema_version", 1)),
+        "session_id": str(value["session_id"]),
+        "user_id": str(value["user_id"]),
+        "turn_count": int(value.get("turn_count", 0)),
+        "current_intent": str(value.get("current_intent", "recommend")),
+        "last_user_query": _optional_string(value.get("last_user_query")),
+        "preference_terms": _string_list(value.get("preference_terms", [])),
+        "exclude_terms": exclude_terms,
+        "seen_track_ids": _string_list(seen_track_ids),
+        "seed_track_ids": _string_list(value.get("seed_track_ids", [])),
+        "active_constraints": active_constraints,
+        "last_run_id": _optional_string(
+            value.get("last_run_id", value.get("last_trajectory_id"))
+        ),
+        "last_recommendation_ids": _string_list(
+            value.get("last_recommendation_ids", [])
+        ),
+        "temporary_feedback": _feedback_list(
+            value.get("temporary_feedback", [])
+        ),
+        "created_at": _optional_string(value.get("created_at")) or _now(),
+        "updated_at": _optional_string(value.get("updated_at")) or _now(),
+    }
+
+
+def _merge_legacy_constraint(
+    constraints: dict[str, Any],
+    field_name: str,
+    legacy_value: Any,
+) -> None:
+    if field_name not in constraints and legacy_value is not None:
+        constraints[field_name] = legacy_value
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip() and item.strip() not in result:
+            result.append(item.strip())
+    return result
+
+
+def _feedback_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _optional_string(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _set_constraint(
+    constraints: dict[str, Any],
+    field_name: str,
+    value: Any,
+) -> None:
+    if value is None:
+        constraints.pop(field_name, None)
+    else:
+        constraints[field_name] = value
