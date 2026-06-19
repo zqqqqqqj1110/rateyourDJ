@@ -18,7 +18,7 @@
           <small>local recommendation studio</small>
         </span>
       </a>
-      <div class="status-pill"><span></span> L1-L6 online</div>
+      <div class="status-pill"><span></span> L1-L7 online</div>
     </header>
 
     <main>
@@ -143,16 +143,26 @@
             <div>
               <h3 class="track-title"></h3>
               <p class="track-artist"></p>
+              <p class="track-album"></p>
             </div>
             <div class="score-badge"><strong></strong><span>score</span></div>
           </div>
           <div class="reason-list"></div>
+          <div class="evidence-list hidden"></div>
+          <div class="ai-answer">
+            <b>AI 回答</b>
+            <p class="ai-answer-text"></p>
+          </div>
           <details>
             <summary>查看分数拆解</summary>
             <div class="score-breakdown"></div>
           </details>
+          <div class="spotify-player hidden">
+            <div class="spotify-embed-mount"></div>
+          </div>
         </div>
         <div class="feedback-actions">
+          <button data-preview class="preview-action hidden" title="Spotify 试听">试听</button>
           <button data-feedback="like" title="喜欢">喜欢</button>
           <button data-feedback="skip" title="跳过">跳过</button>
           <button data-feedback="dislike" title="不喜欢">不喜欢</button>
@@ -177,5 +187,6 @@
     </template>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
   </body>
 </html>

@@ -19,6 +19,7 @@ rateyourdj-l3 = "rateyourdj.l3.cli:main"
 rateyourdj-l4 = "rateyourdj.l4.cli:main"
 rateyourdj-l5 = "rateyourdj.l5.cli:main"
 rateyourdj-l6 = "rateyourdj.l6.cli:main"
+rateyourdj-l7 = "rateyourdj.l7.cli:main"
 rateyourdj-web = "rateyourdj.web.app:main"
 rateyourdj-collect = "rateyourdj.collectors.cli:main"
 

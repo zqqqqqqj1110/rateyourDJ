@@ -145,6 +145,26 @@ class FeedbackServiceTests(unittest.TestCase):
         self.assertEqual(summary.feedback_type_counts["like"], 1)
         self.assertEqual(summary.missing_song_ids, ["deleted-song"])
 
+    def test_records_feedback_for_external_track_ids(self) -> None:
+        record = self.service.record(
+            "user-1",
+            "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+            "favorite",
+        )
+
+        profile = self.profile_store.load("user-1")
+        summary = self.service.summary("user-1")
+        self.assertEqual(record.reward_score, 0.8)
+        self.assertEqual(
+            profile.collection_song_ids,
+            ["spotify:track:4uLU6hMCjMI75M1A2tKUQC"],
+        )
+        self.assertEqual(summary.total_events, 1)
+        self.assertEqual(
+            summary.missing_song_ids,
+            ["spotify:track:4uLU6hMCjMI75M1A2tKUQC"],
+        )
+
     def test_direct_feedback_overrides_transferred_feedback(self) -> None:
         self.service.record("user-1", "rock-song", "like")
         profile = self.profile_store.load("user-1")

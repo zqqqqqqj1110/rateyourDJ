@@ -5,7 +5,9 @@ from pathlib import Path
 from rateyourdj.l1 import JsonProfileStore
 from rateyourdj.l2 import JsonSongStore
 from rateyourdj.l4 import RecommendationRankingService
+from rateyourdj.providers import ExternalMusicProvider
 
+from .agent_tool_registry import AgentToolRegistryV1
 from .models import AgentResponse
 from .provider import LLMProvider
 from .service import RecommendationAgentService
@@ -26,6 +28,7 @@ def request_recommendations(
     max_steps: int = 5,
     agent_mode: str = "auto",
     llm_provider: LLMProvider | None = None,
+    music_provider: ExternalMusicProvider | None = None,
 ) -> AgentResponse:
     profile_store = JsonProfileStore(profile_dir)
     song_store = JsonSongStore(song_dir)
@@ -34,6 +37,15 @@ def request_recommendations(
         song_store,
         JsonTrajectoryStore(trajectory_dir),
         JsonSessionStore(session_dir),
+        model_tool_registry=(
+            AgentToolRegistryV1.default(
+                profile_store,
+                song_store,
+                music_provider=music_provider,
+            )
+            if music_provider is not None
+            else None
+        ),
         llm_provider=llm_provider,
         agent_mode=agent_mode,
     ).recommend(

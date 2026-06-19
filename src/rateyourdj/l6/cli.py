@@ -5,6 +5,8 @@ import json
 import os
 from typing import Any
 
+from rateyourdj.providers import configured_music_provider_from_env
+
 from .deepseek import (
     DEFAULT_DEEPSEEK_BASE_URL,
     DEFAULT_DEEPSEEK_MODEL,
@@ -86,6 +88,7 @@ def main() -> None:
         max_steps=args.max_steps,
         agent_mode=args.agent_mode,
         llm_provider=llm_provider,
+        music_provider=configured_music_provider_from_env(),
     )
     _print_json(response.to_dict())
 

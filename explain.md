@@ -1439,7 +1439,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 当前预期结果：
 
 ```text
-Ran 86 tests
+Ran 130 tests
 OK (skipped=4)
 ```
 
@@ -1453,9 +1453,144 @@ tests，不代表 L6 失败。
 - 流派偏好目前作为结果过滤条件，不会动态修改 L4 权重。
 - 排除项支持 `不要“Pink Floyd”`、`不要 Pink Floyd` 和
   `不要pinkfloyd` 等格式。
-- 在线扩展候选和音频试听尚未接入。
+- 在线扩展候选尚未接入；音频试听已通过 Spotify Embed 接入网页推荐卡片。
 - trajectory 已回写反馈，但还没有独立的训练数据导出器。
 - L6 没有调用外部 LLM，因此当前解释来自可追溯的规则和 L4 分数。
 
 L6 MVP 不包含 SFT/GRPO。训练需要先积累足够的多用户 trajectory 和 reward
 数据；当前少量本地反馈只适合验证数据链路。
+
+## Spotify 试听
+
+网页层会为推荐结果读取对应 L2 的 `external_ids.spotify_track_id`。合法的
+22 位 Spotify track ID 会转换为：
+
+```text
+https://open.spotify.com/embed/track/<spotify_track_id>
+```
+
+卡片仅在 ID 可用时显示“试听”。点击后加载 Spotify 托管的 iframe；切换到
+另一首歌时会卸载前一个 iframe，避免多个播放器同时播放。推荐 API 同时增加：
+
+```text
+spotify_track_id
+spotify_embed_url
+spotify_url
+preview_available
+```
+
+这些字段只用于网页展示，不进入 L4 分数，也不修改 L6 trajectory。
+
+网页使用 Spotify 官方 IFrame API 监听播放状态：
+
+| Spotify 事件/状态 | L5 反馈 |
+| --- | --- |
+| 首次 `playback_started` | `play` |
+| `position >= duration * 0.9` | `play_complete` |
+| 已开始播放且 15 秒内关闭或切歌 | `quick_skip` |
+
+同一播放器实例中每类事件最多写入一次。反馈上下文中的 `source` 为
+`spotify_embed`，并保存播放位置和总时长。L6 聊天推荐会通过 trajectory ID
+回写本次请求；普通 L4 推荐没有 trajectory，只写入 L1 feedback memory。
+
+# L7
+
+## L7 是什么
+
+L7 是 trajectory 数据导出与离线评估层。它读取 L6 写入的 JSON，不修改任何
+用户画像、歌曲画像、排序结果或反馈记录。
+
+## L7 导出
+
+默认导出脱敏 JSONL：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli export \
+  data/exports/trajectories.jsonl
+```
+
+每行包含原始 trajectory 的 query、解析条件、计划、工具 observation、推荐、
+解释、反馈和 L7 生成的摘要字段。`user_id` 默认转换为稳定的 `user_key`。
+
+CSV 只保留 trajectory 级摘要：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli export \
+  data/exports/trajectories.csv --format csv
+```
+
+常用过滤：
+
+```bash
+--user-id demo-user
+--feedback-only
+```
+
+## L7 评估
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli evaluate
+```
+
+主要指标：
+
+| 指标 | 口径 |
+| --- | --- |
+| `goal_satisfied_rate` | `stop_reason` 为 `goal_satisfied` 的比例 |
+| `quantity_satisfied_rate` | 返回数量达到请求 `top_k` 的比例 |
+| `feedback_coverage_rate` | 至少收到一次反馈的 trajectory 比例 |
+| `tool_call_success_rate` | observation 为 `ok` 或 `partial` 的工具调用比例 |
+| `fallback_rate` | 模型路径发生 fallback 的 trajectory 比例 |
+| `average_reward` | 有数值 reward 的反馈平均值 |
+| `skip_rate` | `skip` 和 `quick_skip` 占全部反馈的比例 |
+| `favorite_rate` | `favorite` 和 `playlist_add` 占全部反馈的比例 |
+| `artist_diversity` | 每条推荐列表不同歌手数除以歌曲数后汇总 |
+
+无数据时比例和平均值返回 `0.0`，不产生除零错误。损坏或不兼容的 trajectory
+列入 `skipped_files`。这些指标用于本地回归和数据质量检查，不替代线上实验。
+
+## 验证 L7
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_l7 -v
+```
+
+## 生成合成 trajectory
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli generate-synthetic \
+  data/synthetic/trajectories \
+  --count 500 \
+  --users 25 \
+  --seed 20260615 \
+  --feedback-rate 0.7
+```
+
+生成器从现有 L2 中抽取真实歌曲标题、歌手和流派，但用户、请求、工具调用、
+排序分数和反馈事件均为模拟数据。固定 `seed` 可复现相同 ID 和随机分布。
+目标目录已有 trajectory 时命令会拒绝执行，不会覆盖现有数据。
+
+当前生成的本地样本：
+
+```text
+500 trajectories
+25 synthetic users
+132 sessions
+840 feedback events
+353 trajectories with feedback
+```
+
+它们保存在 `data/synthetic/` 并被 Git 忽略。不要将合成 reward 与真实用户
+reward 混合汇报，也不要用合成数据声称模型获得了真实偏好学习能力。
+
+## 按用户切分
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli \
+  --trajectory-dir data/synthetic/trajectories \
+  split data/synthetic/splits-v1
+```
+
+切分单位是 `user_id`，不是单条 trajectory。一个用户只会出现在 train、
+validation 或 test 中的一个文件。`manifest.json` 记录 seed、请求比例、实际
+用户数、trajectory 数、脱敏状态和坏文件列表。

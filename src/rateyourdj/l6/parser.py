@@ -6,7 +6,15 @@ from .models import AgentRequest
 
 
 GENRE_ALIASES = {
+    "英伦独立摇滚": "british indie rock",
     "英伦摇滚": "british",
+    "独立摇滚": "indie rock",
+    "british indie rock": "british indie rock",
+    "uk indie rock": "british indie rock",
+    "british indie": "british indie",
+    "uk indie": "british indie",
+    "indie rock": "indie rock",
+    "indie": "indie",
     "摇滚": "rock",
     "rock": "rock",
     "爵士": "jazz",

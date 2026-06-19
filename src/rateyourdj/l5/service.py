@@ -54,7 +54,8 @@ class FeedbackService:
             raise ValueError(
                 "feedback_type must be one of " + ", ".join(FEEDBACK_TYPES)
             )
-        if not self.song_store.exists(song_id):
+        local_song_exists = _song_exists(self.song_store, song_id)
+        if not local_song_exists and not _is_external_track_id(song_id):
             raise SongNotFoundError(song_id)
         reward = (
             REWARD_BY_FEEDBACK_TYPE[feedback_type]
@@ -94,7 +95,7 @@ class FeedbackService:
             user_id,
             {"feedback_memory": [record.to_dict()]},
         )
-        if feedback_type in COLLECTION_FEEDBACK_TYPES:
+        if feedback_type in COLLECTION_FEEDBACK_TYPES and local_song_exists:
             collection_song_ids = list(profile.collection_song_ids)
             if song_id not in collection_song_ids:
                 collection_song_ids.append(song_id)
@@ -104,6 +105,11 @@ class FeedbackService:
                 song_data_dir=self.song_store.root,
                 user_data_dir=self.profile_store.root,
             )
+        elif feedback_type in COLLECTION_FEEDBACK_TYPES:
+            collection_song_ids = list(profile.collection_song_ids)
+            if song_id not in collection_song_ids:
+                profile.collection_song_ids = [*collection_song_ids, song_id]
+                self.profile_store.save(profile)
         if trajectory_id and self.trajectory_sink is not None:
             self.trajectory_sink.append_feedback(
                 user_id,
@@ -123,7 +129,7 @@ class FeedbackService:
                 str(record.get("song_id"))
                 for record in profile.feedback_memory
                 if record.get("song_id")
-                and not self.song_store.exists(str(record["song_id"]))
+                and not _song_exists(self.song_store, str(record["song_id"]))
             }
         )
         counts = Counter(
@@ -146,11 +152,22 @@ class FeedbackService:
 
     def score_song(self, user_id: str, song_id: str) -> float:
         profile = self.profile_store.load(user_id)
-        if not self.song_store.exists(song_id):
+        if not _song_exists(self.song_store, song_id):
             raise SongNotFoundError(song_id)
         return FeedbackSignalModel(profile, self.song_store).score(
             self.song_store.load(song_id)
         )
+
+
+def _song_exists(song_store: JsonSongStore, song_id: str) -> bool:
+    try:
+        return song_store.exists(song_id)
+    except ValueError:
+        return False
+
+
+def _is_external_track_id(song_id: str) -> bool:
+    return isinstance(song_id, str) and ":" in song_id and bool(song_id.strip())
 
 
 def _validate_reward(value: float) -> float:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +15,16 @@ from rateyourdj.l5 import FeedbackService
 from rateyourdj.l6 import (
     DEFAULT_DEEPSEEK_BASE_URL,
     DEFAULT_DEEPSEEK_MODEL,
+    AgentToolRegistryV1,
     JsonSessionStore,
     JsonTrajectoryStore,
     LLMProvider,
     RecommendationAgentService,
     configured_llm_provider,
+)
+from rateyourdj.providers import (
+    ExternalMusicProvider,
+    configured_music_provider_from_env,
 )
 
 
@@ -29,6 +35,8 @@ def create_app(
     trajectory_dir: str | Path = "data/trajectories",
     session_dir: str | Path = "data/sessions",
     llm_provider: LLMProvider | None = None,
+    music_provider: ExternalMusicProvider | None = None,
+    auto_configure_music_provider: bool = True,
     agent_mode: str = "auto",
 ) -> Flask:
     app = Flask(__name__)
@@ -42,11 +50,27 @@ def create_app(
         song_store,
         trajectory_store,
     )
+    resolved_music_provider = (
+        music_provider
+        if music_provider is not None
+        else configured_music_provider_from_env()
+        if auto_configure_music_provider
+        else None
+    )
     agent_service = RecommendationAgentService(
         ranking_service,
         song_store,
         trajectory_store,
         session_store,
+        model_tool_registry=(
+            AgentToolRegistryV1.default(
+                profile_store,
+                song_store,
+                music_provider=resolved_music_provider,
+            )
+            if resolved_music_provider is not None
+            else None
+        ),
         llm_provider=llm_provider,
         agent_mode=agent_mode,
     )
@@ -64,6 +88,7 @@ def create_app(
                     llm_provider.name if llm_provider is not None else None
                 ),
                 "model_enabled": llm_provider is not None,
+                "music_provider_enabled": resolved_music_provider is not None,
             }
         )
 
@@ -95,7 +120,7 @@ def create_app(
             top_k=top_k,
             max_per_artist=max_per_artist,
         )
-        return jsonify(result.to_dict())
+        return jsonify(_attach_spotify_playback(result.to_dict(), song_store))
 
     @app.post("/api/chat/<user_id>")
     def chat(user_id: str) -> Any:
@@ -127,7 +152,52 @@ def create_app(
                 choices={"auto", "model", "rules"},
             ),
         )
-        return jsonify(result.to_dict()), 201
+        return jsonify(
+            _attach_spotify_playback(result.to_dict(), song_store)
+        ), 201
+
+    @app.post("/api/v1/agent/recommend")
+    def v1_agent_recommend() -> Any:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        constraints = _optional_mapping(payload, "constraints")
+        result = agent_service.recommend(
+            _required_string(payload, "user_id"),
+            _required_string(payload, "message"),
+            default_top_k=_optional_int(
+                constraints,
+                "limit",
+                default=10,
+                minimum=1,
+                maximum=50,
+            ),
+            session_id=_optional_string(payload, "session_id"),
+            max_steps=_optional_int(
+                payload,
+                "max_steps",
+                default=5,
+                minimum=2,
+                maximum=10,
+            ),
+            agent_mode=_optional_choice(
+                payload,
+                "mode",
+                default=agent_mode,
+                choices={"auto", "model", "rules"},
+            ),
+        )
+        return jsonify(
+            _agent_recommend_response_v1(
+                result.to_dict(),
+                song_store,
+                include_trace=_optional_bool(
+                    payload,
+                    "include_trace",
+                    default=False,
+                ),
+            )
+        ), 201
 
     @app.get("/api/collection/<user_id>")
     def collection(user_id: str) -> Any:
@@ -138,29 +208,38 @@ def create_app(
             if record.get("feedback_type") in {"favorite", "playlist_add"}
             and record.get("song_id")
         }
+        feedback_tracks = _feedback_collection_tracks(stored.feedback_memory)
         songs = []
         missing_song_ids = []
         for song_id in stored.collection_song_ids:
-            if not song_store.exists(song_id):
+            if not _song_exists(song_store, song_id):
                 missing_song_ids.append(song_id)
-                continue
-            song = song_store.load(song_id)
-            songs.append(
-                {
-                    "song_id": song.song_id,
-                    "title": song.metadata.get("title"),
-                    "artist": song.metadata.get("artist"),
-                    "album": song.metadata.get("album"),
-                    "genres": [
-                        name
-                        for name, _score in sorted(
-                            song.genres.items(),
-                            key=lambda item: (-item[1], item[0].casefold()),
-                        )[:3]
-                    ],
-                    "added_via_feedback": song.song_id in feedback_favorites,
-                }
-            )
+                songs.append(
+                    _missing_collection_song(
+                        song_id,
+                        feedback_favorites,
+                        feedback_tracks.get(song_id, {}),
+                    )
+                )
+            else:
+                song = song_store.load(song_id)
+                songs.append(
+                    {
+                        "song_id": song.song_id,
+                        "title": song.metadata.get("title"),
+                        "artist": song.metadata.get("artist"),
+                        "album": song.metadata.get("album"),
+                        "genres": [
+                            name
+                            for name, _score in sorted(
+                                song.genres.items(),
+                                key=lambda item: (-item[1], item[0].casefold()),
+                            )[:3]
+                        ],
+                        "added_via_feedback": song.song_id in feedback_favorites,
+                        "profile_missing": False,
+                    }
+                )
         return jsonify(
             {
                 "user_id": user_id,
@@ -217,6 +296,255 @@ def _top_preferences(
     ]
 
 
+def _attach_spotify_playback(
+    payload: dict[str, Any],
+    song_store: JsonSongStore,
+) -> dict[str, Any]:
+    enriched = dict(payload)
+    ranked_songs = []
+    for ranked_song in payload.get("ranked_songs", []):
+        song = dict(ranked_song)
+        spotify_track_id = song.get("spotify_track_id")
+        song_id = song.get("song_id")
+        if isinstance(song_id, str) and _song_exists(song_store, song_id):
+            spotify_track_id = song_store.load(song_id).external_ids.get(
+                "spotify_track_id"
+            )
+        if not _valid_spotify_track_id(spotify_track_id):
+            spotify_track_id = None
+        song.update(
+            {
+                "spotify_track_id": spotify_track_id,
+                "spotify_embed_url": (
+                    f"https://open.spotify.com/embed/track/{spotify_track_id}"
+                    if spotify_track_id
+                    else None
+                ),
+                "spotify_url": (
+                    f"https://open.spotify.com/track/{spotify_track_id}"
+                    if spotify_track_id
+                    else song.get("spotify_url")
+                ),
+                "preview_available": spotify_track_id is not None,
+            }
+        )
+        ranked_songs.append(song)
+    enriched["ranked_songs"] = ranked_songs
+    return enriched
+
+
+def _agent_recommend_response_v1(
+    payload: dict[str, Any],
+    song_store: JsonSongStore,
+    *,
+    include_trace: bool,
+) -> dict[str, Any]:
+    enriched = _attach_spotify_playback(payload, song_store)
+    recommendations = [
+        _agent_recommendation_v1(
+            song,
+            song_store,
+            parsed_request=enriched.get("parsed_request", {}),
+            seed_song_ids=enriched.get("seed_song_ids", []),
+        )
+        for song in enriched.get("ranked_songs", [])
+    ]
+    response = {
+        "run_id": enriched.get("trajectory_id"),
+        "session_id": enriched.get("session_id"),
+        "user_id": enriched.get("user_id"),
+        "message": enriched.get("message"),
+        "recommendations": recommendations,
+        "memory_updates": {
+            "session_seen_track_ids": [
+                item["track"]["track_id"]
+                for item in recommendations
+                if item["track"].get("track_id")
+            ],
+        },
+        "trace": None,
+    }
+    if include_trace:
+        response["trace"] = {
+            "agent_mode": enriched.get("agent_mode"),
+            "provider": enriched.get("provider"),
+            "fallback_reason": enriched.get("fallback_reason"),
+            "stop_reason": enriched.get("stop_reason"),
+            "attempts": enriched.get("attempts"),
+            "parsed_request": enriched.get("parsed_request"),
+            "tool_calls": enriched.get("tool_calls", []),
+            "agent_decisions": enriched.get("agent_decisions", []),
+            "seed_song_ids": enriched.get("seed_song_ids", []),
+            "missing_seed_song_ids": enriched.get("missing_seed_song_ids", []),
+        }
+    return response
+
+
+def _agent_recommendation_v1(
+    ranked_song: dict[str, Any],
+    song_store: JsonSongStore,
+    *,
+    parsed_request: Any,
+    seed_song_ids: Any,
+) -> dict[str, Any]:
+    return {
+        "rank": ranked_song.get("rank"),
+        "track": _track_payload_v1(ranked_song, song_store),
+        "score": ranked_song.get("final_score"),
+        "evidence": {
+            "score_breakdown": ranked_song.get("score_breakdown", {}),
+            "ranking_reasons": ranked_song.get("ranking_reasons", []),
+            "best_seed_song_id": ranked_song.get("best_seed_song_id"),
+            "retrieval_sources": ranked_song.get("retrieval_sources", []),
+            "preference_terms": (
+                parsed_request.get("preference_terms", [])
+                if isinstance(parsed_request, dict)
+                else []
+            ),
+            "seed_song_ids": (
+                list(seed_song_ids) if isinstance(seed_song_ids, list) else []
+            ),
+        },
+        "reasons": _recommendation_reasons_v1(ranked_song, parsed_request),
+        "actions": {
+            "play": True,
+            "like": True,
+            "dislike": True,
+            "save": True,
+            "skip": True,
+        },
+    }
+
+
+def _track_payload_v1(
+    ranked_song: dict[str, Any],
+    song_store: JsonSongStore,
+) -> dict[str, Any]:
+    song_id = ranked_song.get("song_id")
+    metadata: dict[str, Any] = {}
+    genres: list[str] = list(ranked_song.get("genres") or [])
+    external_ids: dict[str, Any] = {}
+    if isinstance(song_id, str) and _song_exists(song_store, song_id):
+        song = song_store.load(song_id)
+        metadata = dict(song.metadata)
+        external_ids = dict(song.external_ids)
+        genres = [
+            name
+            for name, _score in sorted(
+                song.genres.items(),
+                key=lambda item: (-item[1], item[0].casefold()),
+            )
+        ]
+    spotify_track_id = ranked_song.get("spotify_track_id") or external_ids.get(
+        "spotify_track_id"
+    )
+    return {
+        "track_id": song_id,
+        "title": metadata.get("title") or ranked_song.get("title"),
+        "artist": metadata.get("artist") or ranked_song.get("artist"),
+        "album": metadata.get("album") or ranked_song.get("album"),
+        "release_year": metadata.get("release_year")
+        or ranked_song.get("release_year"),
+        "duration_ms": metadata.get("duration_ms")
+        or ranked_song.get("duration_ms"),
+        "genres": genres,
+        "external_ids": {"spotify_track_id": spotify_track_id},
+        "external_urls": {"spotify": ranked_song.get("spotify_url")},
+        "embed_urls": {"spotify": ranked_song.get("spotify_embed_url")},
+        "preview_available": ranked_song.get("preview_available", False),
+    }
+
+
+def _recommendation_reasons_v1(
+    ranked_song: dict[str, Any],
+    parsed_request: Any,
+) -> list[dict[str, str]]:
+    reasons: list[dict[str, str]] = []
+    ranking_reasons = ranked_song.get("ranking_reasons")
+    if isinstance(ranking_reasons, list):
+        for reason in ranking_reasons[:2]:
+            if isinstance(reason, str) and reason:
+                reasons.append({"type": "profile_match", "text": reason})
+    if isinstance(parsed_request, dict):
+        preference_terms = parsed_request.get("preference_terms")
+        if isinstance(preference_terms, list) and preference_terms:
+            reasons.append(
+                {
+                    "type": "query_match",
+                    "text": (
+                        "Matches the current request preferences: "
+                        + ", ".join(str(term) for term in preference_terms[:4])
+                    ),
+                }
+            )
+    if not reasons:
+        reasons.append(
+            {
+                "type": "ranking",
+                "text": "Selected from the current ranking and session context.",
+            }
+        )
+    return reasons[:3]
+
+
+def _song_exists(song_store: JsonSongStore, song_id: str) -> bool:
+    try:
+        return song_store.exists(song_id)
+    except ValueError:
+        return False
+
+
+def _missing_collection_song(
+    song_id: str,
+    feedback_favorites: set[str],
+    feedback_track: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    track = feedback_track or {}
+    return {
+        "song_id": song_id,
+        "title": track.get("title") or _readable_track_title(song_id),
+        "artist": track.get("artist") or "画像待恢复",
+        "album": track.get("album") or "收藏记录",
+        "genres": [],
+        "added_via_feedback": song_id in feedback_favorites,
+        "profile_missing": True,
+    }
+
+
+def _feedback_collection_tracks(
+    feedback_memory: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    tracks: dict[str, dict[str, Any]] = {}
+    for record in feedback_memory:
+        if record.get("feedback_type") not in {"favorite", "playlist_add"}:
+            continue
+        song_id = record.get("song_id")
+        context = record.get("recommendation_context")
+        if not isinstance(song_id, str) or not isinstance(context, dict):
+            continue
+        track = context.get("track")
+        if isinstance(track, dict) and song_id not in tracks:
+            tracks[song_id] = track
+    return tracks
+
+
+def _readable_track_title(song_id: str) -> str:
+    if song_id.startswith("spotify:track:"):
+        return song_id
+    parts = [part for part in song_id.split("-") if part]
+    if len(parts) > 1 and parts[-1].isdigit():
+        parts = parts[:-1]
+    if len(parts) > 4:
+        parts = parts[-4:]
+    return " ".join(part.capitalize() for part in parts) or song_id
+
+
+def _valid_spotify_track_id(value: Any) -> bool:
+    return isinstance(value, str) and bool(
+        re.fullmatch(r"[A-Za-z0-9]{22}", value)
+    )
+
+
 def _query_int(
     name: str,
     *,
@@ -250,6 +578,27 @@ def _optional_string(payload: dict[str, Any], name: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string or null")
     return value.strip()
+
+
+def _optional_mapping(payload: dict[str, Any], name: str) -> dict[str, Any]:
+    value = payload.get(name, {})
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object or null")
+    return value
+
+
+def _optional_bool(
+    payload: dict[str, Any],
+    name: str,
+    *,
+    default: bool,
+) -> bool:
+    value = payload.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean")
+    return value
 
 
 def _optional_int(

@@ -9,3 +9,5 @@ data/user_profiles/
 data/song_profiles/
 data/trajectories/
 data/sessions/
+data/exports/
+data/synthetic/

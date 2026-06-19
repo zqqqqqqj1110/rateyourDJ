@@ -13,6 +13,7 @@ from rateyourdj.l2 import JsonSongStore, SongProfile
 from rateyourdj.l4 import RecommendationRankingService
 from rateyourdj.l6 import (
     AgentDecision,
+    AgentToolRegistryV1,
     AgentToolRegistry,
     JsonSessionStore,
     JsonTrajectoryStore,
@@ -22,6 +23,11 @@ from rateyourdj.l6 import (
     RecommendationAgentService,
     agent_schema,
     parse_agent_request,
+)
+from rateyourdj.providers import (
+    ExternalMusicProvider,
+    ProviderSearchResult,
+    ProviderTrack,
 )
 
 
@@ -87,6 +93,16 @@ class AgentParserTests(unittest.TestCase):
         self.assertEqual(request.preference_terms, ["british", "rock"])
         self.assertEqual(request.exclude_terms, ["pink floyd"])
 
+    def test_parses_british_indie_rock(self) -> None:
+        request = parse_agent_request(
+            "推荐 5 首 2020 年之后的英伦独立摇滚"
+        )
+
+        self.assertEqual(request.top_k, 5)
+        self.assertIn("british indie rock", request.preference_terms)
+        self.assertIn("indie rock", request.preference_terms)
+        self.assertIn("rock", request.preference_terms)
+
     def test_seen_song_reference_is_not_a_text_exclusion(self) -> None:
         request = parse_agent_request("换一批，不要刚才推荐过的歌曲")
 
@@ -111,7 +127,7 @@ class RecommendationAgentTests(unittest.TestCase):
                 user_id="user-1",
                 collection_song_ids=["seed"],
                 genre_preferences={"rock": 1.0},
-                tag_preferences={"rock": 1.0},
+                tag_preferences={"rock": 1.0, "britpop": 0.8},
             )
         )
         self.song_store.save(
@@ -230,6 +246,260 @@ class RecommendationAgentTests(unittest.TestCase):
         )
         self.assertEqual(trajectory.agent_mode, "model")
         self.assertEqual(len(trajectory.agent_decisions), 3)
+
+    def test_model_can_recommend_tracks_from_external_provider_search(self) -> None:
+        class SearchProvider:
+            queries = []
+
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                self.queries.append(query)
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+                            provider="spotify",
+                            title="Live Forever",
+                            artist="Oasis",
+                            album="Definitely Maybe",
+                            tags={"britpop": 1.0, "british": 1.0, "rock": 1.0},
+                            external_urls={
+                                "spotify": (
+                                    "https://open.spotify.com/track/"
+                                    "4uLU6hMCjMI75M1A2tKUQC"
+                                )
+                            },
+                        )
+                    ],
+                )
+
+        provider = MockLLMProvider(
+            [
+                AgentDecision(
+                    kind="tool",
+                    tool_name="search_tracks",
+                    arguments={"query": "britpop rock", "limit": 3},
+                    summary="search external music provider",
+                ),
+            ]
+        )
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[SearchProvider()]
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend("user-1", "推荐一首 britpop rock")
+
+        self.assertEqual(response.stop_reason, "goal_satisfied")
+        self.assertEqual(
+            response.ranked_songs[0]["song_id"],
+            "spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+        )
+        self.assertEqual(response.ranked_songs[0]["title"], "Live Forever")
+        self.assertEqual(
+            response.ranked_songs[0]["retrieval_sources"],
+            ["spotify_search"],
+        )
+        self.assertEqual(
+            response.ranked_songs[0]["spotify_track_id"],
+            "4uLU6hMCjMI75M1A2tKUQC",
+        )
+        self.assertEqual(
+            [call["tool"] for call in response.tool_calls],
+            ["get_user_memory", "search_tracks"],
+        )
+        self.assertGreater(
+            response.ranked_songs[0]["score_breakdown"]["profile_match"],
+            0,
+        )
+        self.assertEqual(
+            response.tool_calls[1]["decision_source"],
+            "program_provider_first",
+        )
+
+    def test_external_provider_search_preserves_year_and_indie_intent(self) -> None:
+        class SearchProvider:
+            queries = []
+
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                self.queries.append(query)
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:old",
+                            provider="spotify",
+                            title="Old Indie",
+                            artist="Band A",
+                            album="Old Album",
+                            release_year=2019,
+                            tags={"indie": 1.0, "rock": 1.0},
+                        ),
+                        ProviderTrack(
+                            track_id="spotify:track:new",
+                            provider="spotify",
+                            title="New Indie",
+                            artist="Band B",
+                            album="New Album",
+                            release_year=2021,
+                            tags={"indie": 1.0, "rock": 1.0},
+                        ),
+                    ],
+                )
+
+        search_provider = SearchProvider()
+        provider = MockLLMProvider([])
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[search_provider]
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "推荐 1 首 2020 年之后的英伦独立摇滚",
+        )
+
+        self.assertEqual(search_provider.queries, ["2020 british indie rock"])
+        self.assertEqual(
+            [song["song_id"] for song in response.ranked_songs],
+            ["spotify:track:new"],
+        )
+
+    def test_external_provider_search_does_not_require_local_tags(self) -> None:
+        class SearchProvider:
+            queries = []
+
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                self.queries.append(query)
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:wonderwall",
+                            provider="spotify",
+                            title="Wonderwall",
+                            artist="Oasis",
+                            album="(What's The Story) Morning Glory?",
+                            release_year=1995,
+                        )
+                    ],
+                )
+
+        search_provider = SearchProvider()
+        provider = MockLLMProvider([])
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[search_provider]
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend("user-1", "给我1首经典的英伦摇滚")
+
+        self.assertEqual(search_provider.queries, ["british rock"])
+        self.assertEqual(response.stop_reason, "goal_satisfied")
+        self.assertEqual(
+            [song["song_id"] for song in response.ranked_songs],
+            ["spotify:track:wonderwall"],
+        )
+        self.assertIn(
+            "外部搜索结果",
+            response.message,
+        )
+
+    def test_external_provider_mode_does_not_fall_back_to_local_ranking(self) -> None:
+        class EmptySearchProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[],
+                )
+
+        provider = MockLLMProvider(
+            [
+                AgentDecision(
+                    kind="tool",
+                    tool_name="L4.rank_candidates",
+                    arguments={},
+                    summary="try local fallback",
+                ),
+            ]
+        )
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[EmptySearchProvider()]
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend("user-1", "推荐一首 rock")
+
+        self.assertEqual(response.stop_reason, "insufficient_candidates")
+        self.assertEqual(response.ranked_songs, [])
+        self.assertEqual(
+            [call["tool"] for call in response.tool_calls],
+            ["get_user_memory", "search_tracks"],
+        )
 
     def test_provider_failure_falls_back_to_rules(self) -> None:
         provider = MockLLMProvider(

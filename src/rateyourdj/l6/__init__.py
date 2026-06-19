@@ -21,9 +21,12 @@ from .provider import (
     LLMResponseError,
     MockLLMProvider,
 )
-from .service import AgentLoopError, RecommendationAgentService
+from .errors import AgentLoopError
+from .service import RecommendationAgentService
 from .sessions import AgentSession, JsonSessionStore
 from .store import JsonTrajectoryStore, TrajectoryNotFoundError
+from .agent_tool_registry import AgentToolRegistryV1
+from .agent_tool_schemas import AGENT_TOOL_SCHEMAS, agent_tool_schemas
 from .tool_registry import AgentToolRegistry
 from .tools import request_recommendations
 
@@ -37,6 +40,8 @@ __all__ = [
     "AgentLoopError",
     "AgentSession",
     "AgentToolRegistry",
+    "AgentToolRegistryV1",
+    "AGENT_TOOL_SCHEMAS",
     "DEFAULT_DEEPSEEK_BASE_URL",
     "DEFAULT_DEEPSEEK_MODEL",
     "DeepSeekProvider",
@@ -49,6 +54,7 @@ __all__ = [
     "RecommendationAgentService",
     "TrajectoryNotFoundError",
     "agent_schema",
+    "agent_tool_schemas",
     "configured_llm_provider",
     "parse_agent_request",
     "request_recommendations",

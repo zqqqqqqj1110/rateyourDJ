@@ -620,8 +620,122 @@ POST /api/chat/<user_id>
 
 后续请求把响应中的 `session_id` 原样传回即可使用“换一批”多轮状态。
 
-播放与试听需要可靠的外部播放源，作为后续集成项。SFT/GRPO 属于 L6
-积累足够 trajectory 和 reward 数据之后的训练阶段，不作为 L6 MVP 的阻塞项。
+网页推荐卡片已接入 Spotify Embed。存在合法 `spotify_track_id` 的歌曲会显示
+“试听”按钮；页面同时只保留一个活动播放器。该功能使用 Spotify 托管播放器，
+不下载或代理音频。Spotify IFrame 播放事件会作为 L5 feedback 写入 L1，并在
+存在 trajectory ID 时回连 L6。SFT/GRPO 属于 L6 积累足够 trajectory 和
+reward 数据之后的训练阶段，不作为 L6 MVP 的阻塞项。
+
+## L7 数据导出与离线评估
+
+L7 只读取 L6 trajectory，不修改 L1-L6 的画像、推荐或反馈数据。它提供：
+
+- JSONL 导出：保留 query、工具调用、推荐、解释和反馈，供后续分析或训练。
+- CSV 导出：每条 trajectory 一行，方便表格分析。
+- 默认用户脱敏：真实 `user_id` 被稳定的 SHA-256 摘要替换。
+- 数据过滤：可限定用户，或只导出包含反馈的 trajectory。
+- 坏文件隔离：无法解析的 trajectory 会列入 `skipped_files`，不阻断整批任务。
+- 离线评估：统计目标达成、数量满足、反馈覆盖、reward、工具调用、回退和
+  推荐歌手多样性。
+
+查看 L7 schema：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli schema
+```
+
+导出默认脱敏 JSONL：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli export \
+  data/exports/trajectories.jsonl
+```
+
+导出只包含反馈的 CSV：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli export \
+  data/exports/feedback.csv \
+  --format csv \
+  --feedback-only
+```
+
+运行全量或单用户离线评估：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli evaluate
+
+PYTHONPATH=src python3 -m rateyourdj.l7.cli evaluate \
+  --user-id demo-user
+```
+
+可通过 `RATEYOURDJ_EXPORT_SALT` 设置部署环境专用脱敏盐。只有在受控环境明确
+需要原始 ID 时才使用 `--include-user-id`。导出文件默认放在 `data/exports/`，
+该目录不会提交到 Git。
+
+L7 指标反映当前已记录数据，不能消除曝光偏差，也不能替代多用户在线 A/B
+测试。没有反馈的 trajectory 仍参与推荐和工具指标，但不参与 reward 平均值。
+
+### 合成数据
+
+L7 可以使用现有 L2 歌曲画像生成隔离的合成 trajectory，用于测试导出、评估
+和未来训练代码。默认不会写入真实 `data/trajectories`：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli generate-synthetic \
+  data/synthetic/trajectories \
+  --count 500 \
+  --users 25 \
+  --seed 20260615 \
+  --feedback-rate 0.7
+```
+
+生成内容包括多种流派请求、推荐列表、L1/L4 工具 observation、候选不足、
+规则与模型模式，以及 `play`、`play_complete`、`like`、`skip`、`favorite`
+等反馈。所有用户和 trajectory ID 都使用 `synthetic-` 前缀。输出目录必须为空，
+避免误覆盖已有样本。
+
+评估和导出：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli \
+  --trajectory-dir data/synthetic/trajectories evaluate
+
+PYTHONPATH=src python3 -m rateyourdj.l7.cli \
+  --trajectory-dir data/synthetic/trajectories \
+  export data/synthetic/exports/trajectories.jsonl \
+  --feedback-only
+```
+
+合成数据只能验证数据结构、指标和训练管道，不能用于判断推荐系统真实效果，
+也不能替代真实用户反馈进行有效模型训练。
+
+### 按用户切分数据集
+
+训练、验证和测试数据必须按用户切分，不能把同一用户的不同 trajectory 随机
+分散到多个集合：
+
+```bash
+PYTHONPATH=src python3 -m rateyourdj.l7.cli \
+  --trajectory-dir data/synthetic/trajectories \
+  split data/synthetic/splits-v1 \
+  --train-ratio 0.8 \
+  --validation-ratio 0.1 \
+  --test-ratio 0.1 \
+  --seed 20260615
+```
+
+输出 `train.jsonl`、`validation.jsonl`、`test.jsonl` 和 `manifest.json`。
+相同 seed 和用户集合会得到相同切分。当前合成数据的实际结果是：
+
+```text
+train:      20 users / 400 trajectories
+validation:  3 users /  60 trajectories
+test:        2 users /  40 trajectories
+```
+
+三个集合的用户交集为零。用户数不能精确满足小数比例时，manifest 会记录最接近
+目标比例的实际整数分配。
 
 ## 本地网页
 
@@ -631,6 +745,8 @@ POST /api/chat/<user_id>
 - 查看收藏歌曲、专辑和主要流派；缺失 L2 画像时显示缺失数量。
 - 通过 L6 自然语言输入生成推荐并保存 trajectory。
 - 生成 L4 推荐列表并查看分数拆解。
+- 通过 Spotify Embed 试听具有 `spotify_track_id` 的推荐歌曲。
+- 将播放开始、播放完成和快速关闭记录到 L5 与 L6 trajectory。
 - 提交 `like`、`skip`、`dislike` 和 `favorite`。
 - 收藏后立即更新收藏列表，并刷新推荐排序。
 
@@ -711,5 +827,5 @@ Agent Metrics：
 ### L6 前端目标
 
 网页增加聊天输入框，用户可以用自然语言请求推荐。响应包含推荐理由和歌曲
-列表，并继续复用现有喜欢、跳过、不喜欢和收藏反馈。试听功能需要接入合法且
-稳定的音频预览来源后再实现。
+列表，并继续复用现有喜欢、跳过、不喜欢和收藏反馈。当前已使用 Spotify
+Embed 提供试听；没有 `spotify_track_id` 的歌曲不会显示试听按钮。
