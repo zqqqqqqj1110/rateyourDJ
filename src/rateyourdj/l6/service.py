@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
@@ -105,7 +106,17 @@ class RecommendationAgentService:
 
         parsed = parse_agent_request(query, default_top_k=default_top_k)
         session = self.session_store.load_or_create(user_id, session_id)
-        if parsed.intent == "question":
+        # Unified ReAct turn: in model mode with a chat-capable provider, EVERY
+        # request (question OR recommendation) first gets a text answer, then the
+        # model decides via `action` whether to attach songs. This guarantees
+        # "answer first, then decide to recommend" across the board. The classic
+        # ranking loop remains the rules-mode / no-key fallback below.
+        unified = (
+            resolved_mode in {"auto", "model"}
+            and self.llm_provider is not None
+            and hasattr(self.llm_provider, "answer_question")
+        )
+        if parsed.intent == "question" or unified:
             return self._answer_question_turn(
                 user_id=user_id,
                 request=parsed,
@@ -264,6 +275,14 @@ class RecommendationAgentService:
         session.last_recommendation_ids = [
             str(song["song_id"]) for song in recommendations
         ]
+        session.last_recommended_tracks = [
+            {
+                "title": str(song.get("title") or ""),
+                "artist": str(song.get("artist") or ""),
+                "reason": _first_reason(song),
+            }
+            for song in recommendations
+        ]
         session.append_message("user", session_request.query)
         session.append_message("dj", message)
         session.seen_song_ids = unique(
@@ -396,6 +415,8 @@ class RecommendationAgentService:
         fallback_reason: str | None = None
         answer: str | None = None
         suggested_tracks: list[dict[str, str]] = []
+        action = "answer_only"
+        thought = ""
         use_model = (
             resolved_mode in {"auto", "model"}
             and self.llm_provider is not None
@@ -404,12 +425,32 @@ class RecommendationAgentService:
         if use_model:
             provider_name = self.llm_provider.name
             try:
-                answer, suggested_tracks = self.llm_provider.answer_question(
+                (
+                    answer,
+                    action,
+                    thought,
+                    suggested_tracks,
+                ) = self.llm_provider.answer_question(
                     request.query,
                     history=[dict(item) for item in session.messages],
+                    last_recommendations=[
+                        dict(item) for item in session.last_recommended_tracks
+                    ],
+                    avoid_tracks=[
+                        dict(item) for item in session.last_recommended_tracks
+                    ],
                 )
             except Exception as error:  # noqa: BLE001 - degrade gracefully
+                # Surface the real failure (don't swallow it) so it is
+                # diagnosable, then degrade. This block runs even when a key IS
+                # configured but the call/parse failed.
                 fallback_reason = str(error)
+                logging.getLogger(__name__).warning(
+                    "answer_question failed (provider=%s): %s",
+                    provider_name,
+                    error,
+                    exc_info=True,
+                )
                 answer = None
         elif resolved_mode == "model":
             fallback_reason = (
@@ -417,19 +458,52 @@ class RecommendationAgentService:
             )
 
         executed_mode = "model" if answer is not None else "rules"
-        message = answer or (
-            "这个问题我来聊聊——不过当前没有配置对话模型（DeepSeek），"
-            "暂时只能帮你推荐歌曲。配置 DEEPSEEK_API_KEY 后我就能回答这类"
-            "音乐问题啦。想听歌的话，直接说想要的风格或心情就行。"
-        )
+        if answer is not None:
+            message = answer
+        elif fallback_reason and self.llm_provider is not None:
+            # A provider IS configured but the call failed — say so honestly
+            # instead of claiming no DeepSeek key is set.
+            message = (
+                "刚才生成回答时出了点问题，暂时没拿到结果，请再试一次。"
+                f"（原因：{fallback_reason}）"
+            )
+        else:
+            message = (
+                "这个问题我来聊聊——不过当前没有配置对话模型（DeepSeek），"
+                "暂时只能帮你推荐歌曲。配置 DEEPSEEK_API_KEY 后我就能回答这类"
+                "音乐问题啦。想听歌的话，直接说想要的风格或心情就行。"
+            )
 
-        # Ground the tracks the answer proposed so each becomes a real,
-        # playable card (drops anything the model hallucinated).
-        ranked_songs = self._ground_suggested_tracks(suggested_tracks)
+        # Only suggest_new grounds NEW playable cards. explain_only / answer_only
+        # return no new songs — explaining the prior batch must not re-recommend.
+        if action == "suggest_new":
+            ranked_songs, proposed_count = self._ground_suggested_tracks(
+                suggested_tracks
+            )
+            # The model proposed songs but the provider could confirm none of
+            # them (common for Chinese-language artists missing from Spotify).
+            # Be honest in the text instead of silently showing zero cards.
+            if proposed_count > 0 and not ranked_songs:
+                message = (
+                    message.rstrip()
+                    + "\n\n（这些歌暂时没能在 Spotify 上匹配到可试听版本，"
+                    "所以没有附上播放卡片——可能是版权区域或中文曲目收录的限制。）"
+                )
+        else:
+            ranked_songs = []
 
         session.turn_count += 1
-        session.current_intent = "question"
+        session.current_intent = request.intent
         session.last_user_query = request.query
+        if action == "suggest_new" and ranked_songs:
+            session.last_recommended_tracks = [
+                {
+                    "title": str(song.get("title") or ""),
+                    "artist": str(song.get("artist") or ""),
+                    "reason": _first_reason(song),
+                }
+                for song in ranked_songs
+            ]
         session.append_message("user", request.query)
         session.append_message("dj", message)
         self.session_store.save(session)
@@ -450,7 +524,9 @@ class RecommendationAgentService:
             ranked_songs=ranked_songs,
             seed_song_ids=[],
             missing_seed_song_ids=[],
-            stop_reason="answered_question",
+            stop_reason=(
+                "goal_satisfied" if ranked_songs else "answered_question"
+            ),
             attempts=0,
             tool_calls=[],
             agent_mode=executed_mode,
@@ -460,10 +536,12 @@ class RecommendationAgentService:
             agent_decisions=[
                 {
                     "kind": "question_answer",
+                    "action": action,
+                    "thought": thought,
                     "summary": (
-                        "answered a music question"
+                        f"answered (action={action})"
                         + (
-                            f" and suggested {len(ranked_songs)} tracks"
+                            f", suggested {len(ranked_songs)} tracks"
                             if ranked_songs
                             else ""
                         )
@@ -475,10 +553,16 @@ class RecommendationAgentService:
     def _ground_suggested_tracks(
         self,
         suggested_tracks: list[dict[str, str]],
-    ) -> list[dict[str, Any]]:
-        """Confirm chat-proposed tracks exist and shape them as ranked songs."""
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Confirm chat-proposed tracks exist and shape them as ranked songs.
+
+        Returns ``(grounded_songs, proposed_count)`` so the caller can tell the
+        difference between "the model proposed nothing" and "the model proposed
+        songs but none could be confirmed on the provider" (common for non-
+        Western / Chinese-language artists missing from Spotify).
+        """
         if not suggested_tracks or self.discovery_service is None:
-            return []
+            return [], 0
         candidates = [
             GeneratedCandidate(
                 title=str(item.get("title") or "").strip(),
@@ -490,7 +574,7 @@ class RecommendationAgentService:
             and str(item.get("artist") or "").strip()
         ]
         if not candidates:
-            return []
+            return [], 0
         try:
             result = self.discovery_service.ground_candidates(
                 candidates,
@@ -498,11 +582,14 @@ class RecommendationAgentService:
                 count=len(candidates),
             )
         except Exception:  # noqa: BLE001 - grounding is best-effort
-            return []
-        return [
-            discovered_track_to_ranked_song(track, index)
-            for index, track in enumerate(result.tracks, start=1)
-        ]
+            return [], len(candidates)
+        return (
+            [
+                discovered_track_to_ranked_song(track, index)
+                for index, track in enumerate(result.tracks, start=1)
+            ],
+            len(candidates),
+        )
 
     def _validate_model_tool_arguments(
         self,
@@ -601,6 +688,19 @@ def _exclude_terms_summary(request: AgentRequest) -> list[str]:
     return details
 
 
+def _first_reason(song: dict[str, Any]) -> str:
+    """Best available human reason for a ranked song (used to explain later)."""
+    discovery_reason = str(song.get("discovery_reason") or "").strip()
+    if discovery_reason:
+        return discovery_reason
+    ranking_reasons = song.get("ranking_reasons")
+    if isinstance(ranking_reasons, list):
+        for reason in ranking_reasons:
+            if isinstance(reason, str) and reason.strip():
+                return reason.strip()
+    return ""
+
+
 def _has_external_search_source(songs: list[dict[str, Any]]) -> bool:
     return any(
         str(source).endswith("_search")
@@ -662,6 +762,9 @@ def _session_memory_snapshot(session: AgentSession) -> dict[str, Any]:
         "active_constraints": dict(session.active_constraints),
         "last_run_id": session.last_run_id,
         "last_recommendation_ids": list(session.last_recommendation_ids),
+        "last_recommended_tracks": [
+            dict(item) for item in session.last_recommended_tracks
+        ],
         "temporary_feedback": [
             dict(item) for item in session.temporary_feedback
         ],

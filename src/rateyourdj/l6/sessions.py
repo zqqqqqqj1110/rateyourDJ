@@ -36,6 +36,7 @@ class AgentSession:
     active_constraints: dict[str, Any] = field(default_factory=dict)
     last_run_id: str | None = None
     last_recommendation_ids: list[str] = field(default_factory=list)
+    last_recommended_tracks: list[dict[str, Any]] = field(default_factory=list)
     temporary_feedback: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=_now)
@@ -248,6 +249,9 @@ def _migrate_session_payload(value: dict[str, Any]) -> dict[str, Any]:
         "last_recommendation_ids": _string_list(
             value.get("last_recommendation_ids", [])
         ),
+        "last_recommended_tracks": _track_list(
+            value.get("last_recommended_tracks", [])
+        ),
         "temporary_feedback": _feedback_list(
             value.get("temporary_feedback", [])
         ),
@@ -280,6 +284,28 @@ def _feedback_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _track_list(value: Any) -> list[dict[str, Any]]:
+    """Normalize stored last-recommended tracks (title/artist/reason)."""
+    if not isinstance(value, list):
+        return []
+    tracks: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        artist = str(item.get("artist") or "").strip()
+        if not title and not artist:
+            continue
+        tracks.append(
+            {
+                "title": title,
+                "artist": artist,
+                "reason": str(item.get("reason") or "").strip(),
+            }
+        )
+    return tracks
 
 
 def _message_list(value: Any) -> list[dict[str, Any]]:

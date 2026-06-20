@@ -239,12 +239,14 @@ function appendDJReply(result, query) {
   bubble.appendChild(head);
 
   const recs = result.recommendations || [];
-  const isQuestion = result.intent === "question";
+  const hasAnswer = Boolean((result.message || "").trim());
   if (recs.length === 0) {
-    // 问答类回复：message 本身就是答案，不提示"没找到歌"
-    if (!isQuestion) {
+    // 统一为「先回答，再决定是否推歌」后，很多回复本就有意不带歌（纯问答、
+    // 解释已推荐、或这次没合适的歌）。只要有文字回答，就不显示「没找到歌」。
+    // 仅当既没有回答、也没有歌时，才给一句兜底提示。
+    if (!hasAnswer) {
       bubble.appendChild(
-        el("p", "dj-empty", "这次没找到合适的歌，换个说法试试？")
+        el("p", "dj-empty", "这次没找到合适的内容，换个说法试试？")
       );
     }
   } else {

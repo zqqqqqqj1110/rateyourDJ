@@ -170,21 +170,32 @@ _THOUGHT_PROPERTY = {
 
 
 _QA_SYSTEM_PROMPT = """\
-你是 rateyourDJ，一位懂行、健谈的音乐 DJ 助手。用户在和你聊天，这一条消息是
-一个「问答」而不是让你推荐歌单的请求（例如询问某首歌/某位艺人的来历、风格、
-年代、背景，或追问刚才对话里提到的内容）。
+你是 rateyourDJ，一位懂行、健谈的音乐 DJ 助手，按 ReAct 方式工作：先思考，再决定
+这一轮要不要推荐歌曲。无论用户说什么，你都【先给出一段文字回答】，然后由你自己
+决定是否附上歌曲。
 
-请始终通过调用 answer_with_tracks 函数来回应，包含两部分：
-1. answer：直接、准确地回答问题，用中文，语气自然友好，像懂音乐的朋友聊天。
-   可以适当展开背景、轶事、风格脉络，但保持简洁，一般 2-5 句话。如果用户在追问
-   “刚才/上一首/第二首”，请结合提供的对话历史回答。不要捏造事实；不确定就坦诚说。
-2. suggested_tracks：可选。当你的回答聊到了具体的乐队、歌曲或风格，并且顺带听几首
-   会让对话更连贯时，附上 2-3 首真实存在、与话题高度相关的歌（每首给 title、artist
-   和一句中文 reason 说明为什么推荐它、和话题怎么关联）。
+请始终调用 answer_with_tracks 函数，并包含这些字段：
+1. thought：一两句推理——判断用户这条消息属于哪种情况，并说明依据。
+2. action：三选一：
+   - "explain_only"：用户在追问上面已经推荐过的歌（如“为什么推荐这三首”“第二首
+     是什么风格”“有什么理由吗”），或在问一个关于已推荐内容的判断（如“他们是英伦
+     摇滚吗”）。此时【只用文字回答/解释，绝不生成新歌】，suggested_tracks 留空。
+     可参考提供的 last_recommendations 上下文。
+   - "suggest_new"：用户想要歌——无论是直接点歌（“推荐些英伦摇滚”“来点爵士”
+     “换一批”），还是问某乐队/风格有什么好歌（“Blur 有什么经典歌曲”）。此时
+     answer 里【先用一两句话回应】（例如“Blur 最出圈的几首是…”），然后在
+     suggested_tracks 给 2-3 首真实存在、贴合请求的歌，每首带 title、artist 和一句
+     中文 reason。若提供了 avoid_tracks，尽量不要重复其中的歌。
+   - "answer_only"：纯事实问答或闲聊（如“某乐队哪年成立”“你知道 Oasis 吗”），
+     用文字回答即可，无需歌曲。
+3. answer：给用户看的文字回答，用中文，自然友好，一般 2-5 句。【任何情况都要先有
+   这段回答】。
+4. suggested_tracks：仅当 action="suggest_new" 时填写；其余情况留空。
 
-什么时候【不要】附歌：纯事实性的追问（如“刚才第二首叫什么”“这首歌哪年发行的”），
-或话题与具体可听的歌无关时，suggested_tracks 留空即可。不要硬塞歌。
-只提议你确信真实存在的歌曲，用原始录音室版本的标题。
+重要：
+- 当用户用“为什么/凭什么/理由/解释/是不是/算不算/他们是…吗/这几首/这三首”指向
+  【已推荐内容】时，几乎总是 explain_only——不要误当成“再推荐一批”。
+- 只提议你确信真实存在的歌曲，用原始录音室版本的标题。
 """
 
 _ANSWER_TOOL = {
@@ -192,12 +203,25 @@ _ANSWER_TOOL = {
     "function": {
         "name": "answer_with_tracks",
         "description": (
-            "Reply to a conversational music question, optionally suggesting a "
-            "few real, relevant tracks the user could listen to next."
+            "Reply to a music chat turn. Always give a text answer first, then "
+            "decide via `action` whether to explain already-recommended tracks, "
+            "suggest new ones, or just answer."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "thought": {
+                    "type": "string",
+                    "description": (
+                        "ReAct reasoning: is the user asking about already-"
+                        "recommended tracks, asking for new ones, or just "
+                        "chatting? Justify the chosen action."
+                    ),
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["explain_only", "suggest_new", "answer_only"],
+                },
                 "answer": {"type": "string"},
                 "suggested_tracks": {
                     "type": "array",
@@ -213,7 +237,7 @@ _ANSWER_TOOL = {
                     },
                 },
             },
-            "required": ["answer"],
+            "required": ["thought", "action", "answer"],
             "additionalProperties": False,
         },
     },
@@ -314,23 +338,64 @@ class DeepSeekProvider:
         query: str,
         *,
         history: list[dict[str, Any]] | None = None,
-    ) -> tuple[str, list[dict[str, str]]]:
-        """Answer a conversational music question, optionally suggesting tracks.
+        last_recommendations: list[dict[str, Any]] | None = None,
+        avoid_tracks: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, str, str, list[dict[str, str]]]:
+        """Answer a music chat turn and decide (ReAct) whether to suggest tracks.
 
-        Returns ``(answer_text, suggested_tracks)`` where each suggested track
-        is ``{"title", "artist", "reason"}``. ``history`` is an optional list of
-        prior turns like ``{"role": "user"|"dj", "text": "..."}`` so the model
-        can resolve references such as "刚才第二首叫什么".
+        Returns ``(answer_text, action, thought, suggested_tracks)`` where
+        ``action`` is one of ``answer_only`` / ``explain_only`` / ``suggest_new``
+        and each suggested track is ``{"title", "artist", "reason"}``.
+
+        ``history`` is the recent conversation; ``last_recommendations`` is the
+        previous turn's recommended tracks (title/artist/reason) so the model can
+        EXPLAIN them when the user asks "why these?" instead of inventing new
+        songs.
         """
         messages: list[dict[str, str]] = [
             {"role": "system", "content": _QA_SYSTEM_PROMPT}
         ]
+        if last_recommendations:
+            context = [
+                {
+                    "title": str(item.get("title") or ""),
+                    "artist": str(item.get("artist") or ""),
+                    "reason": str(item.get("reason") or ""),
+                }
+                for item in last_recommendations
+            ]
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "last_recommendations（上一轮已经推荐给用户的歌，"
+                        "当用户追问“为什么/这几首”时请解释这些，不要另生成新歌）："
+                        + json.dumps(context, ensure_ascii=False)
+                    ),
+                }
+            )
         for turn in (history or [])[-8:]:
             text = str(turn.get("text") or "").strip()
             if not text:
                 continue
             role = "assistant" if turn.get("role") == "dj" else "user"
             messages.append({"role": role, "content": text})
+        if avoid_tracks:
+            avoid = [
+                f"{item.get('title', '')} - {item.get('artist', '')}".strip(" -")
+                for item in avoid_tracks
+            ]
+            avoid = [item for item in avoid if item]
+            if avoid:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "avoid_tracks（本次会话已经展示过的歌，若要推荐新歌请"
+                            "尽量避免重复这些）：" + json.dumps(avoid, ensure_ascii=False)
+                        ),
+                    }
+                )
         messages.append({"role": "user", "content": query})
         payload = {
             "model": self.model,
@@ -442,7 +507,7 @@ class DeepSeekProvider:
         try:
             function = selected_call["function"]
             external_name = str(function["name"])
-            arguments = json.loads(function["arguments"])
+            arguments = _tool_call_arguments(selected_call)
         except (KeyError, TypeError, json.JSONDecodeError) as error:
             raise LLMResponseError(
                 "DeepSeek returned an invalid function call"
@@ -542,10 +607,28 @@ def configured_llm_provider(
     raise ValueError("llm_provider must be auto, deepseek, or none")
 
 
+def _tool_call_arguments(call: dict[str, Any]) -> Any:
+    """Return a tool call's arguments, tolerating dict-or-JSON-string forms.
+
+    The OpenAI-compatible contract says `function.arguments` is a JSON string,
+    but some DeepSeek responses (or SDK paths) deliver an already-parsed dict.
+    Accept both so a valid call is never misreported as a parse failure.
+    """
+    arguments = call["function"]["arguments"]
+    if isinstance(arguments, dict):
+        return arguments
+    return json.loads(arguments)
+
+
 def _parse_answer(
     response: dict[str, Any],
-) -> tuple[str, list[dict[str, str]]]:
-    """Parse the answer_with_tracks tool call; tolerate a plain content reply."""
+) -> tuple[str, str, str, list[dict[str, str]]]:
+    """Parse answer_with_tracks → (answer, action, thought, tracks).
+
+    Tolerates a plain content reply (treated as answer_only). Enforces the
+    ReAct decision: only ``suggest_new`` keeps suggested tracks; ``explain_only``
+    and ``answer_only`` always return an empty track list.
+    """
     try:
         message = response["choices"][0]["message"]
     except (KeyError, IndexError, TypeError) as error:
@@ -556,7 +639,7 @@ def _parse_answer(
     tool_calls = message.get("tool_calls")
     if isinstance(tool_calls, list) and tool_calls:
         try:
-            arguments = json.loads(tool_calls[0]["function"]["arguments"])
+            arguments = _tool_call_arguments(tool_calls[0])
         except (KeyError, TypeError, json.JSONDecodeError) as error:
             raise LLMResponseError(
                 "DeepSeek returned invalid answer_with_tracks arguments"
@@ -564,14 +647,27 @@ def _parse_answer(
         if not isinstance(arguments, dict):
             raise LLMResponseError("answer_with_tracks arguments must be object")
         answer = str(arguments.get("answer") or "").strip()
-        tracks = _clean_suggested_tracks(arguments.get("suggested_tracks"))
+        thought = str(arguments.get("thought") or "").strip()
+        action = str(arguments.get("action") or "").strip()
+        if action not in {"answer_only", "explain_only", "suggest_new"}:
+            # Infer: tracks present implies a suggestion, else plain answer.
+            action = (
+                "suggest_new"
+                if arguments.get("suggested_tracks")
+                else "answer_only"
+            )
+        tracks = (
+            _clean_suggested_tracks(arguments.get("suggested_tracks"))
+            if action == "suggest_new"
+            else []
+        )
         if answer:
-            return answer, tracks
+            return answer, action, thought, tracks
 
     # Fallback: some responses may carry a plain content string instead.
     content = message.get("content")
     if isinstance(content, str) and content.strip():
-        return content.strip(), []
+        return content.strip(), "answer_only", "", []
     raise LLMResponseError("DeepSeek returned an empty answer")
 
 
