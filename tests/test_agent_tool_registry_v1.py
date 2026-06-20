@@ -13,6 +13,7 @@ CORE_AGENT_TOOLS = {
     "update_session_memory",
     "propose_memory_update",
     "commit_memory_update",
+    "discover_tracks",
     "search_tracks",
     "get_track_metadata",
     "get_artist_profile",
@@ -271,7 +272,7 @@ class AgentToolRegistryV1Tests(unittest.TestCase):
         self.assertEqual(explanation.status, "ok")
         self.assertEqual(
             explanation.data["recommendations"][0]["reasons"][0]["type"],
-            "ranking_evidence",
+            "ranking",
         )
         self.assertTrue(saved.data["saved"])
         self.assertEqual(saved.data["collection_count"], 2)
@@ -418,6 +419,108 @@ class AgentToolRegistryV1ProviderTests(unittest.TestCase):
             observation.data["artists"][0]["source_artist"],
             "Oasis",
         )
+
+
+class StubTrackGenerator:
+    @property
+    def name(self):
+        return "stub"
+
+    def generate(self, *, intent, user_taste, count, exclude_artists):
+        from rateyourdj.domain import GeneratedCandidate
+
+        return [
+            GeneratedCandidate("Live Forever", "Oasis", "britpop anthem"),
+            GeneratedCandidate("Made Up", "Nobody", "n/a"),
+        ]
+
+
+class GroundingMetadataProvider:
+    """Confirms only Oasis - Live Forever; everything else 404s."""
+
+    @property
+    def provider_name(self):
+        return "fake"
+
+    def get_track_metadata(self, query: TrackQuery):
+        if query.artist.casefold() == "oasis":
+            return ProviderTrack(
+                track_id="spotify:track:liveforever",
+                provider="spotify",
+                title=query.title,
+                artist=query.artist,
+                album="Definitely Maybe",
+                release_year=1994,
+                preview_url="https://preview",
+            )
+        from rateyourdj.providers import ProviderError
+
+        raise ProviderError("not found")
+
+
+class AgentToolRegistryDiscoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        root = Path(self.temporary_directory.name)
+        self.profile_store = JsonProfileStore(root / "profiles")
+        self.song_store = JsonSongStore(root / "songs")
+        self.profile_store.save(
+            UserProfile(
+                user_id="user-1",
+                collection_song_ids=["seed"],
+                artist_preferences={"Oasis": 1.0},
+                genre_preferences={"britpop": 1.0},
+            )
+        )
+        self.song_store.save(make_song("seed", artist="Oasis"))
+        self.music_provider = ExternalMusicProvider(
+            metadata_provider=GroundingMetadataProvider(),
+        )
+        self.registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=self.music_provider,
+            track_generator=StubTrackGenerator(),
+        )
+
+    def tearDown(self) -> None:
+        self.temporary_directory.cleanup()
+
+    def test_discover_tracks_is_registered_with_generator(self) -> None:
+        self.assertIn("discover_tracks", self.registry.names())
+        schema_names = {schema["name"] for schema in self.registry.model_schemas()}
+        self.assertIn("discover_tracks", schema_names)
+
+    def test_discover_tracks_grounds_and_drops_hallucinations(self) -> None:
+        observation = self.registry.call(
+            "discover_tracks",
+            user_id="user-1",
+            intent="britpop please",
+            limit=5,
+        )
+
+        self.assertEqual(observation.tool, "discover_tracks")
+        self.assertEqual(observation.status, "ok")
+        self.assertEqual(observation.data["generated"], 2)
+        self.assertEqual(observation.data["grounded"], 1)
+        self.assertEqual(observation.data["dropped"], 1)
+        track = observation.data["tracks"][0]
+        self.assertEqual(track["title"], "Live Forever")
+        self.assertEqual(track["artist"], "Oasis")
+        self.assertEqual(track["spotify_track_id"], "liveforever")
+        self.assertTrue(track["preview_available"])
+        self.assertEqual(
+            track["retrieval_sources"],
+            ["spotify_discovery"],
+        )
+
+    def test_discover_tracks_absent_without_generator(self) -> None:
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=self.music_provider,
+        )
+        self.assertNotIn("discover_tracks", registry.names())
 
 
 if __name__ == "__main__":

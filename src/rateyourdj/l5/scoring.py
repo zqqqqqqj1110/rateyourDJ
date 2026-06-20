@@ -59,7 +59,7 @@ class FeedbackSignalModel:
             if not isinstance(song_id, str) or not song_id or reward == 0:
                 continue
             self.direct_rewards[song_id] = reward
-            if song_store.exists(song_id):
+            if _song_exists(song_store, song_id):
                 self.feedback_songs.append((song_store.load(song_id), reward))
 
     def score(self, song: SongProfile) -> float:
@@ -83,3 +83,10 @@ def _reward(record: Mapping[str, object]) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0.0
     return max(-1.0, min(float(value), 1.0))
+
+
+def _song_exists(song_store: JsonSongStore, song_id: str) -> bool:
+    try:
+        return song_store.exists(song_id)
+    except ValueError:
+        return False

@@ -1,0 +1,50 @@
+{"query_id":"manual-basic-001","category":"basic","query":"推荐 5 首英伦摇滚","focus":["baseline_intent","genre_match"],"notes":"检查通用英伦摇滚基线是否稳定。"}
+{"query_id":"manual-basic-002","category":"basic","query":"推荐 5 首更旋律一点的英伦摇滚","focus":["melodic_bias","query_match"],"notes":"看 melodic 是否真的影响排序。"}
+{"query_id":"manual-basic-003","category":"basic","query":"来点 90 年代的英伦摇滚","focus":["era_filter","genre_match"],"notes":"看年代和风格是否同时保留。"}
+{"query_id":"manual-basic-004","category":"basic","query":"推荐 5 首 britpop","focus":["tag_match","genre_match"],"notes":"检查英文字段和中文 query 混用。"}
+{"query_id":"manual-basic-005","category":"basic","query":"推荐 5 首英国独立摇滚，别太吵","focus":["indie_match","negative_constraint"],"notes":"看 softer / less noisy 的控制力。"}
+{"query_id":"manual-basic-006","category":"basic","query":"来点更冷一点的英伦摇滚","focus":["style_refinement","ranking_sensitivity"],"notes":"测试 refinement 语义。"}
+{"query_id":"manual-basic-007","category":"basic","query":"推荐 5 首经典英伦摇滚","focus":["canonical_tracks","query_match"],"notes":"看是否优先经典主版本。"}
+{"query_id":"manual-basic-008","category":"basic","query":"来点更现代一点的英伦摇滚","focus":["modern_bias","ranking_sensitivity"],"notes":"看新歌倾向是否可感知。"}
+{"query_id":"manual-similarity-001","category":"similarity_single_anchor","query":"来点更像 Oasis 的英伦摇滚","focus":["reference_match_hard_floor","artist_expansion_quality"],"notes":"不该掉到泛 british rock。"}
+{"query_id":"manual-similarity-002","category":"similarity_single_anchor","query":"来点更像 Oasis 的英伦摇滚，旋律一点","focus":["reference_match_hard_floor","melodic_bias","artist_expansion_quality"],"notes":"检查 Oasis-like + melodic 联合约束。"}
+{"query_id":"manual-similarity-003","category":"similarity_single_anchor","query":"还是不够像 Oasis，我想要更旋律一点的英伦摇滚","focus":["session_refinement","exclude_seen","artist_expansion_quality"],"notes":"看 more/refinement 是否持续收紧而不是跑偏。"}
+{"query_id":"manual-similarity-004","category":"similarity_single_anchor","query":"给我 5 首像 Blur 的英伦摇滚","focus":["reference_match_hard_floor","artist_expansion_quality"],"notes":"看 Blur 锚点是否稳定。"}
+{"query_id":"manual-similarity-005","category":"similarity_single_anchor","query":"给我 5 首像 Pulp 的英伦摇滚","focus":["reference_match_hard_floor","artist_expansion_quality"],"notes":"看 Pulp 是否能扩到正确邻居。"}
+{"query_id":"manual-similarity-006","category":"similarity_single_anchor","query":"给我 5 首像 Suede 的英伦摇滚","focus":["reference_match_hard_floor","artist_expansion_quality"],"notes":"看更窄锚点是否还能返回足够结果。"}
+{"query_id":"manual-similarity-007","category":"similarity_single_anchor","query":"给我 5 首像 The Stone Roses 的英伦摇滚","focus":["reference_match_hard_floor","cluster_diversity"],"notes":"看 Madchester / britpop 邻接关系。"}
+{"query_id":"manual-similarity-008","category":"similarity_single_anchor","query":"给我 5 首像 The Verve 的英伦摇滚，旋律一点","focus":["reference_match_hard_floor","melodic_bias"],"notes":"看 Verve 方向是否比 Oasis 更柔和。"}
+{"query_id":"manual-similarity-009","category":"similarity_single_anchor","query":"给我 5 首像 Arctic Monkeys 的英国摇滚","focus":["reference_match_hard_floor","modern_bias"],"notes":"看 newer anchor 的扩展是否稳定。"}
+{"query_id":"manual-similarity-010","category":"similarity_single_anchor","query":"给我 5 首像 Radiohead 的英国摇滚，不要太实验","focus":["reference_match_hard_floor","negative_constraint"],"notes":"看负面约束是否抑制过实验结果。"}
+{"query_id":"manual-similarity-011","category":"similarity_dual_anchor","query":"不要 Sex Pistols 这种，给我更像 Blur / Oasis 的英伦摇滚","focus":["dual_anchor_balance","negative_constraint","artist_expansion_quality"],"notes":"重点看双锚点是否都参与而不是单边塌缩。"}
+{"query_id":"manual-similarity-012","category":"similarity_dual_anchor","query":"给我更像 Oasis / Blur 的英伦摇滚，旋律一点","focus":["dual_anchor_balance","melodic_bias"],"notes":"看双锚点 + refinement。"}
+{"query_id":"manual-similarity-013","category":"similarity_dual_anchor","query":"给我 5 首像 Blur / Pulp 的英伦摇滚","focus":["dual_anchor_balance","cluster_diversity"],"notes":"检查结果是否同时覆盖两边邻域。"}
+{"query_id":"manual-similarity-014","category":"similarity_dual_anchor","query":"给我 5 首像 Oasis / The Verve 的英国摇滚","focus":["dual_anchor_balance","artist_expansion_quality"],"notes":"看更 melodic 的双锚点。"}
+{"query_id":"manual-similarity-015","category":"similarity_dual_anchor","query":"给我 5 首像 The Stone Roses / Oasis 的英国摇滚","focus":["dual_anchor_balance","cluster_diversity"],"notes":"看 Stone Roses 是否不会被 Oasis 完全压住。"}
+{"query_id":"manual-similarity-016","category":"similarity_dual_anchor","query":"给我 5 首像 Suede / Blur 的英伦摇滚，不要太吵","focus":["dual_anchor_balance","negative_constraint"],"notes":"看 quieter 限制是否有效。"}
+{"query_id":"manual-negative-001","category":"negative_constraint","query":"不要 Sex Pistols 这种，来点更像 Oasis 的英伦摇滚","focus":["negative_constraint","reference_match_hard_floor"],"notes":"看 punk 负锚点是否明显生效。"}
+{"query_id":"manual-negative-002","category":"negative_constraint","query":"不要 Noel Gallagher's High Flying Birds 这种，给我更像 Blur / Oasis 的英伦摇滚","focus":["family_debias","dual_anchor_balance"],"notes":"看 Gallagher 支线是否真能压下去。"}
+{"query_id":"manual-negative-003","category":"negative_constraint","query":"不要 Liam Gallagher / Beady Eye 这种，给我更像 Oasis 的英伦摇滚","focus":["family_debias","artist_expansion_quality"],"notes":"看家族去偏是否生效。"}
+{"query_id":"manual-negative-004","category":"negative_constraint","query":"不要 live 版，来点更像 Oasis 的英伦摇滚","focus":["version_penalty","reference_match_hard_floor"],"notes":"看 live/session 是否显著减少。"}
+{"query_id":"manual-negative-005","category":"negative_constraint","query":"不要 remaster 太多，来点更像 Blur 的英伦摇滚","focus":["version_penalty","reference_match_hard_floor"],"notes":"看 remastered 噪声。"}
+{"query_id":"manual-negative-006","category":"negative_constraint","query":"不要重复的，来点更像 Oasis 的英伦摇滚","focus":["exclude_seen","cluster_diversity","adjacency_diversity"],"notes":"看 more 前后是否能保持新鲜度。"}
+{"query_id":"manual-negative-007","category":"negative_constraint","query":"不要太朋克，推荐 5 首更旋律一点的英伦摇滚","focus":["negative_constraint","melodic_bias"],"notes":"看 softer / anti-punk 控制。"}
+{"query_id":"manual-negative-008","category":"negative_constraint","query":"不要太实验，给我 5 首更像 Blur 的英国摇滚","focus":["negative_constraint","reference_match_hard_floor"],"notes":"看风格排除能否压住跑偏。"}
+{"query_id":"manual-session-001","category":"session_more","query":"推荐 5 首更像 Oasis 的英伦摇滚","focus":["baseline_for_followup"],"notes":"作为后续 more 查询的起点。"}
+{"query_id":"manual-session-002","category":"session_more","query":"换一批，不要刚才推荐过的歌曲","focus":["exclude_seen","trajectory_memory"],"notes":"在 session-001 之后测。"}
+{"query_id":"manual-session-003","category":"session_more","query":"还是不够像 Oasis，我想要更旋律一点的英伦摇滚，不要重复的","focus":["session_refinement","exclude_seen","artist_expansion_quality"],"notes":"在 session-001 或 session-002 之后测。"}
+{"query_id":"manual-session-004","category":"session_more","query":"不要 Noel Gallagher's High Flying Birds 这种，给我更像 Blur / Oasis 的英伦摇滚","focus":["session_refinement","family_debias","dual_anchor_balance"],"notes":"看 follow-up 是否正确继承上下文。"}
+{"query_id":"manual-session-005","category":"session_more","query":"再来一批，更新一点，不要重复歌手","focus":["exclude_seen","artist_diversity","modern_bias"],"notes":"看 current intent 和 session constraints。"}
+{"query_id":"manual-session-006","category":"session_more","query":"还是不够像 Blur，我要更流畅一点、更经典一点的","focus":["session_refinement","single_anchor_shift"],"notes":"看 anchor shift 是否正确覆盖旧上下文。"}
+{"query_id":"manual-diversity-001","category":"diversity","query":"给我 8 首像 Oasis 的英伦摇滚，不要重复歌手","focus":["max_per_artist","cluster_diversity"],"notes":"检查 artist quota。"}
+{"query_id":"manual-diversity-002","category":"diversity","query":"给我 8 首像 Blur / Oasis 的英伦摇滚，每位歌手最多一首","focus":["max_per_artist","dual_anchor_balance","adjacency_diversity"],"notes":"检查跨簇分布。"}
+{"query_id":"manual-diversity-003","category":"diversity","query":"给我 8 首英国摇滚，尽量多样一点","focus":["artist_diversity","adjacency_diversity"],"notes":"非 similarity 情况下的多样性。"}
+{"query_id":"manual-diversity-004","category":"diversity","query":"来点英伦摇滚，不要全是同一个支线","focus":["cluster_diversity","family_debias"],"notes":"看 cluster quota 是否可感知。"}
+{"query_id":"manual-diversity-005","category":"diversity","query":"给我 6 首像 Oasis 的英伦摇滚，但别全是 Gallagher 系","focus":["family_debias","cluster_diversity"],"notes":"看 family penalty 和 user-facing 结果。"}
+{"query_id":"manual-version-001","category":"version_noise","query":"推荐 5 首经典英伦摇滚，尽量主版本","focus":["version_penalty","canonical_tracks"],"notes":"看是否优先 album/studio cut。"}
+{"query_id":"manual-version-002","category":"version_noise","query":"来点更像 Oasis 的英伦摇滚，不要现场版","focus":["version_penalty","reference_match_hard_floor"],"notes":"检查 live/session suppression。"}
+{"query_id":"manual-version-003","category":"version_noise","query":"来点更像 Blur 的英伦摇滚，别给我一堆 remaster","focus":["version_penalty"],"notes":"检查 remastered suppression。"}
+{"query_id":"manual-version-004","category":"version_noise","query":"推荐 5 首英伦摇滚，不要 deluxe 版优先","focus":["version_penalty"],"notes":"检查 deluxe 轻惩罚是否够用。"}
+{"query_id":"manual-ui-001","category":"ui_summary","query":"不要 Sex Pistols 这种，给我更像 Blur / Oasis 的英伦摇滚","focus":["summary_copy_cleanliness"],"notes":"检查 UI 摘要是否不再回显生硬 exclude_terms。"}
+{"query_id":"manual-ui-002","category":"ui_summary","query":"还是不够像 Oasis，我想要更旋律一点的英伦摇滚，不要重复的","focus":["summary_copy_cleanliness","session_refinement"],"notes":"检查摘要里是否出现“已避开重复结果”等清洗后的文案。"}
+{"query_id":"manual-ui-003","category":"ui_summary","query":"不要 Noel Gallagher's High Flying Birds 这种，给我更像 Blur / Oasis 的英伦摇滚","focus":["summary_copy_cleanliness","family_debias"],"notes":"检查 Gallagher 支线摘要是否清晰。"}

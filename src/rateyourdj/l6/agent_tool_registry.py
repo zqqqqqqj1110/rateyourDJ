@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from rateyourdj.agent_tools import ToolObservation
+from rateyourdj.domain import DiscoveryService, ExplanationGenerator
 from rateyourdj.l1 import JsonProfileStore, inspect_user_profile
 from rateyourdj.l2 import JsonSongStore, inspect_song_profile
 from rateyourdj.l3 import retrieve_candidates_tool
@@ -82,6 +83,7 @@ class AgentToolRegistryV1:
         song_store: JsonSongStore,
         music_provider: ExternalMusicProvider | None = None,
         session_store: JsonSessionStore | None = None,
+        track_generator: Any | None = None,
     ) -> AgentToolRegistryV1:
         registry = cls()
         profile_dir = profile_store.root
@@ -89,6 +91,18 @@ class AgentToolRegistryV1:
         resolved_session_store = session_store or JsonSessionStore(
             profile_dir.parent / "sessions"
         )
+
+        if music_provider is not None and track_generator is not None:
+            discovery_service = DiscoveryService(track_generator, music_provider)
+            registry.register(
+                "discover_tracks",
+                lambda **arguments: _discover_tracks(
+                    discovery_service=discovery_service,
+                    profile_dir=profile_dir,
+                    song_store=song_store,
+                    **arguments,
+                ),
+            )
 
         if music_provider is not None:
             registry.register(
@@ -98,7 +112,6 @@ class AgentToolRegistryV1:
                     **arguments,
                 ),
             )
-
         registry.register(
             "get_user_memory",
             lambda **arguments: _as_v1_observation(
@@ -220,7 +233,10 @@ class AgentToolRegistryV1:
         )
         registry.register(
             "explain_recommendations",
-            lambda **arguments: _explain_recommendations(**arguments),
+            lambda **arguments: _explain_recommendations(
+                profile_dir=profile_dir,
+                **arguments,
+            ),
         )
         registry.register(
             "save_to_collection",
@@ -671,6 +687,148 @@ def _search_tracks(
     )
 
 
+def _discover_tracks(
+    *,
+    discovery_service: DiscoveryService,
+    profile_dir: str | Path,
+    song_store: JsonSongStore,
+    user_id: str,
+    intent: str | None = None,
+    limit: int = 10,
+    exclude_artists: list[str] | None = None,
+    **_ignored: Any,
+) -> ToolObservation:
+    """Generate candidate songs from user taste, then ground them.
+
+    The LLM (or fallback generator) proposes songs; the music provider confirms
+    each one exists. Confirmed tracks are shaped to match the ranked-song
+    structure used by the rest of the pipeline.
+    """
+    user_taste = _user_taste_from_profile(
+        user_id=user_id,
+        profile_dir=profile_dir,
+        song_store=song_store,
+    )
+    resolved_intent = str(intent or "").strip() or "recommend music I would enjoy"
+    try:
+        result = discovery_service.discover(
+            intent=resolved_intent,
+            user_taste=user_taste,
+            count=max(1, int(limit)),
+            exclude_artists=_string_list(exclude_artists or []),
+        )
+    except Exception as error:  # noqa: BLE001
+        return ToolObservation(
+            tool="discover_tracks",
+            status="empty",
+            data={"intent": resolved_intent, "tracks": []},
+            diagnostics=[str(error)],
+            retryable=True,
+            suggested_actions=[],
+        )
+
+    tracks = [
+        _discovered_track_to_ranked_song(item, rank)
+        for rank, item in enumerate(result.tracks, start=1)
+    ]
+    # Provider-track-shaped dicts let the model loop reuse external ranking.
+    provider_tracks = []
+    for item in result.tracks:
+        track_data = item.track.to_dict()
+        track_data.pop("raw", None)
+        track_data["discovery_reason"] = item.discovery_reason
+        provider_tracks.append(track_data)
+    diagnostics = list(result.diagnostics)
+    diagnostics.append(
+        f"generated {result.generated}, grounded {result.grounded}, "
+        f"dropped {result.dropped} (hallucination_rate "
+        f"{result.hallucination_rate})"
+    )
+    status = "ok" if tracks else "empty"
+    return ToolObservation(
+        tool="discover_tracks",
+        status=status,
+        data={
+            "intent": resolved_intent,
+            "tracks": tracks,
+            "provider_tracks": provider_tracks,
+            "generated": result.generated,
+            "grounded": result.grounded,
+            "dropped": result.dropped,
+            "hallucination_rate": result.hallucination_rate,
+            "dropped_candidates": list(result.dropped_candidates),
+        },
+        diagnostics=diagnostics,
+        retryable=not tracks,
+        suggested_actions=[],
+    )
+
+
+def _user_taste_from_profile(
+    *,
+    user_id: str,
+    profile_dir: str | Path,
+    song_store: JsonSongStore,
+) -> dict[str, Any]:
+    observation = inspect_user_profile(user_id, data_dir=profile_dir)
+    data = dict(observation.data)
+    taste: dict[str, Any] = {
+        "artist_preferences": dict(data.get("artist_preferences", {})),
+        "genre_preferences": dict(data.get("genre_preferences", {})),
+        "tag_preferences": dict(data.get("tag_preferences", {})),
+    }
+    seed_tracks: list[dict[str, Any]] = []
+    for song_id in data.get("collection_song_ids", [])[:25]:
+        try:
+            song = song_store.load(str(song_id))
+        except Exception:
+            continue
+        title = str(song.metadata.get("title") or "").strip()
+        artist = str(song.metadata.get("artist") or "").strip()
+        if title and artist:
+            seed_tracks.append({"title": title, "artist": artist})
+    taste["seed_tracks"] = seed_tracks
+    return taste
+
+
+def _discovered_track_to_ranked_song(
+    item: Any,
+    rank: int,
+) -> dict[str, Any]:
+    track = item.track
+    track_id = (track.track_id or "").strip()
+    spotify_track_id = None
+    if track_id.startswith("spotify:track:"):
+        spotify_track_id = track_id.rsplit(":", 1)[-1] or None
+    return {
+        "rank": rank,
+        "song_id": track_id or f"{item.artist}::{item.title}",
+        "title": item.title,
+        "artist": item.artist,
+        "album": track.album,
+        "release_year": track.release_year,
+        "duration_ms": track.duration_ms,
+        "genres": list(track.genres or {}),
+        "tags": list(track.tags or {}),
+        "final_score": 0.0,
+        "base_score": 0.0,
+        "score_breakdown": {},
+        "diversity_penalty": 0.0,
+        "ranking_reasons": (
+            [item.discovery_reason] if item.discovery_reason else []
+        ),
+        "best_seed_song_id": None,
+        "retrieval_sources": [f"{track.provider or 'provider'}_discovery"],
+        "provider": track.provider,
+        "spotify_track_id": spotify_track_id,
+        "preview_url": track.preview_url,
+        "image_url": track.image_url,
+        "preview_available": bool(spotify_track_id),
+        "discovery_reason": item.discovery_reason,
+        "evidence": {"discovery_reason": item.discovery_reason},
+    }
+
+
 def _get_similar_artists_from_provider(
     *,
     music_provider: ExternalMusicProvider,
@@ -814,49 +972,33 @@ def _explain_recommendations(
     ranked_tracks: list[dict[str, Any]],
     session_id: str | None = None,
     style: str = "balanced",
+    profile_dir: str | Path | None = None,
 ) -> ToolObservation:
-    recommendations = []
-    for track in ranked_tracks:
-        track_id = str(
-            track.get("track_id") or track.get("song_id") or ""
-        ).strip()
-        reasons = []
-        ranking_reasons = track.get("ranking_reasons")
-        if isinstance(ranking_reasons, list):
-            for reason in ranking_reasons[:3]:
-                if isinstance(reason, str) and reason.strip():
-                    reasons.append(
-                        {
-                            "type": "ranking_evidence",
-                            "label": "推荐依据",
-                            "text": reason.strip(),
-                        }
-                    )
-        evidence = track.get("evidence")
-        if isinstance(evidence, dict):
-            matched = evidence.get("matched_preferences")
-            if isinstance(matched, list) and matched:
-                reasons.append(
-                    {
-                        "type": "memory_match",
-                        "label": "符合偏好",
-                        "text": "匹配你的偏好：" + "、".join(map(str, matched[:3])),
-                    }
-                )
-        if not reasons:
-            title = track.get("title") or track_id or "这首歌"
-            reasons.append(
-                {
-                    "type": "session_intent",
-                    "label": "符合本次请求",
-                    "text": f"{title} 符合这次的推荐条件。",
-                }
+    user_memory: dict[str, Any] = {}
+    if profile_dir is not None:
+        try:
+            user_memory = dict(
+                inspect_user_profile(user_id, data_dir=profile_dir).data
             )
+        except Exception:
+            user_memory = {}
+
+    generator = ExplanationGenerator()
+    explanations = generator.explain_all(
+        ranked_tracks,
+        user_memory=user_memory,
+        style=style,
+    )
+    recommendations = []
+    for track, explanation in zip(ranked_tracks, explanations):
         recommendations.append(
             {
-                "track_id": track_id,
+                "track_id": str(
+                    track.get("track_id") or track.get("song_id") or ""
+                ).strip(),
                 "song_id": track.get("song_id"),
-                "reasons": reasons[:1] if style == "short" else reasons,
+                "reasons": [reason.to_dict() for reason in explanation.reasons],
+                "evidence": [item.to_dict() for item in explanation.evidence],
             }
         )
     return ToolObservation(

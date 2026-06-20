@@ -1,213 +1,86 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>rateyourDJ</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rateyourDJ · 你的 AI 音乐 DJ</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
   </head>
   <body>
     <div class="ambient ambient-one"></div>
     <div class="ambient ambient-two"></div>
 
-    <header class="site-header">
-      <a class="brand" href="/">
+    <header class="topbar">
+      <div class="brand">
         <span class="brand-mark">RY</span>
-        <span>
+        <span class="brand-text">
           <strong>rateyourDJ</strong>
-          <small>local recommendation studio</small>
+          <small>你的 AI 音乐 DJ</small>
         </span>
-      </a>
-      <div class="status-pill"><span></span> L1-L7 online</div>
+      </div>
+      <div class="topbar-right">
+        <label class="user-field">
+          <span>用户</span>
+          <input id="user-id" value="demo-user" autocomplete="off" spellcheck="false" />
+        </label>
+        <button id="open-collection" type="button" class="ghost-button">
+          收藏 <span id="collection-badge" class="badge">0</span>
+        </button>
+        <span id="status-pill" class="status-pill"><span class="dot"></span> 连接中…</span>
+      </div>
     </header>
 
-    <main>
-      <section class="hero">
-        <div>
-          <p class="eyebrow">YOUR COLLECTION, REMIXED</p>
-          <h1>从收藏出发，<br><em>找到下一首歌。</em></h1>
-          <p class="hero-copy">
-            本地歌曲画像、相似度召回、偏好排序和反馈闭环，现在都在一个页面里。
-          </p>
+    <main class="chat-shell">
+      <div id="chat-stream" class="chat-stream">
+        <div class="welcome" id="welcome">
+          <h1>想听点什么？</h1>
+          <p>告诉我你的口味，我会推荐歌、附上试听，你点赞、收藏或跳过，我会越来越懂你。</p>
+          <div class="suggestion-row" id="suggestion-row">
+            <button type="button" class="suggestion" data-q="给我推荐一些最经典的英伦摇滚">最经典的英伦摇滚</button>
+            <button type="button" class="suggestion" data-q="想要适合深夜的慵懒爵士">深夜慵懒爵士</button>
+            <button type="button" class="suggestion" data-q="有没有像 Radiohead 那样的另类摇滚">像 Radiohead 的另类摇滚</button>
+            <button type="button" class="suggestion" data-q="推荐一些适合写代码时听的电子乐">写代码时听的电子乐</button>
+          </div>
         </div>
-        <form id="controls" class="control-panel">
-          <label>
-            用户
-            <input id="user-id" value="demo-user" autocomplete="off">
-          </label>
-          <label>
-            推荐数量
-            <select id="top-k">
-              <option value="5">5 首</option>
-              <option value="10" selected>10 首</option>
-              <option value="20">20 首</option>
-            </select>
-          </label>
-          <button type="submit" class="primary-button">生成推荐</button>
-        </form>
-      </section>
+      </div>
 
-      <section class="dashboard-grid">
-        <article class="panel profile-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="section-label">PROFILE</p>
-              <h2>收藏画像</h2>
-            </div>
-            <span id="profile-version" class="meta-label">v-</span>
-          </div>
-          <div class="stat-row">
-            <div><strong id="collection-count">-</strong><span>收藏歌曲</span></div>
-            <div><strong id="feedback-count">-</strong><span>反馈事件</span></div>
-            <div><strong id="average-reward">-</strong><span>平均奖励</span></div>
-          </div>
-          <div class="preference-block">
-            <span>偏好歌手</span>
-            <div id="top-artists" class="chips"></div>
-          </div>
-          <div class="preference-block">
-            <span>偏好流派</span>
-            <div id="top-genres" class="chips"></div>
-          </div>
-        </article>
-
-        <article class="panel feedback-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="section-label">FEEDBACK LOOP</p>
-              <h2>反馈状态</h2>
-            </div>
-          </div>
-          <div class="feedback-meter">
-            <div id="positive-bar" class="positive-bar"></div>
-            <div id="negative-bar" class="negative-bar"></div>
-          </div>
-          <div class="feedback-legend">
-            <span><i class="positive-dot"></i><b id="positive-count">0</b> 正反馈</span>
-            <span><i class="negative-dot"></i><b id="negative-count">0</b> 负反馈</span>
-          </div>
-          <p class="feedback-note">
-            喜欢与跳过会调整下一次排序；收藏与加入歌单还会更新 L1 收藏画像。
-          </p>
-        </article>
-      </section>
-
-      <section class="collection-section">
-        <div class="section-heading">
-          <div>
-            <p class="section-label">YOUR COLLECTION</p>
-            <h2>我的收藏</h2>
-          </div>
-          <p id="collection-meta">等待载入收藏</p>
-        </div>
-        <div id="collection" class="collection-grid"></div>
-      </section>
-
-      <section class="agent-section">
-        <div class="section-heading">
-          <div>
-            <p class="section-label">L6 RECOMMENDATION AGENT</p>
-            <h2>告诉 DJ 你现在想听什么</h2>
-          </div>
-          <p id="agent-meta">自然语言请求会保存为 trajectory</p>
-        </div>
-        <form id="agent-form" class="agent-form">
-          <input
-            id="agent-query"
-            autocomplete="off"
-            placeholder="例如：推荐 5 首多样一点的摇滚，不要“Pink Floyd”"
-          >
-          <button type="submit" class="primary-button">问 DJ</button>
-        </form>
-        <p id="agent-response" class="agent-response hidden"></p>
-        <details id="agent-debug-panel" class="agent-debug hidden">
-          <summary>查看本次 agent debug</summary>
-          <div class="agent-debug-grid">
-            <div class="agent-debug-item">
-              <span>anchor artist</span>
-              <b id="debug-anchor-artists">-</b>
-            </div>
-            <div class="agent-debug-item">
-              <span>expanded artists</span>
-              <b id="debug-expanded-artists">-</b>
-            </div>
-            <div class="agent-debug-item agent-debug-item-wide">
-              <span>final search query</span>
-              <b id="debug-search-query">-</b>
-            </div>
-            <div class="agent-debug-item agent-debug-item-wide">
-              <span>search plan</span>
-              <b id="debug-search-plan">-</b>
-            </div>
-          </div>
-        </details>
-      </section>
-
-      <section class="recommendations-section">
-        <div class="section-heading">
-          <div>
-            <p class="section-label">RECOMMENDATIONS</p>
-            <h2>为你挑选</h2>
-          </div>
-          <p id="result-meta">等待生成推荐</p>
-        </div>
-        <div id="message" class="message hidden"></div>
-        <div id="recommendations" class="track-list"></div>
-      </section>
+      <form id="composer" class="composer" autocomplete="off">
+        <input
+          id="composer-input"
+          type="text"
+          placeholder="比如：给我推荐一些最经典的英伦摇滚"
+          aria-label="输入你想听的内容"
+        />
+        <button id="composer-send" type="submit" class="primary-button" aria-label="发送">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12 2-12 2z" fill="currentColor" />
+          </svg>
+        </button>
+      </form>
     </main>
 
-    <template id="track-template">
-      <article class="track-card">
-        <div class="rank-number"></div>
-        <div class="track-main">
-          <div class="track-title-row">
-            <div>
-              <h3 class="track-title"></h3>
-              <p class="track-artist"></p>
-              <p class="track-album"></p>
-            </div>
-            <div class="score-badge"><strong></strong><span>score</span></div>
-          </div>
-          <div class="reason-list"></div>
-          <div class="evidence-list hidden"></div>
-          <div class="ai-answer">
-            <b>AI 回答</b>
-            <p class="ai-answer-text"></p>
-          </div>
-          <details>
-            <summary>查看分数拆解</summary>
-            <div class="score-breakdown"></div>
-          </details>
-          <div class="spotify-player hidden">
-            <div class="spotify-embed-mount"></div>
-          </div>
+    <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+    <aside id="collection-drawer" class="drawer hidden" aria-hidden="true">
+      <div class="drawer-head">
+        <div>
+          <p class="drawer-eyebrow">YOUR COLLECTION</p>
+          <h2>我的收藏</h2>
         </div>
-        <div class="feedback-actions">
-          <button data-preview class="preview-action hidden" title="Spotify 试听">试听</button>
-          <button data-feedback="like" title="喜欢">喜欢</button>
-          <button data-feedback="skip" title="跳过">跳过</button>
-          <button data-feedback="dislike" title="不喜欢">不喜欢</button>
-          <button data-feedback="favorite" class="accent-action" title="收藏">收藏</button>
-        </div>
-      </article>
-    </template>
+        <button id="close-collection" type="button" class="icon-button" aria-label="关闭">✕</button>
+      </div>
+      <div class="drawer-stats">
+        <div><strong id="stat-collection">0</strong><span>收藏</span></div>
+        <div><strong id="stat-feedback">0</strong><span>反馈</span></div>
+        <div><strong id="stat-reward">0.00</strong><span>平均评分</span></div>
+      </div>
+      <div id="collection-list" class="collection-list">
+        <p class="drawer-empty">还没有收藏。点歌曲卡片上的 ♥ 就会出现在这里。</p>
+      </div>
+    </aside>
 
-    <template id="collection-template">
-      <article class="collection-card">
-        <div class="collection-art"><span>RY</span></div>
-        <div class="collection-copy">
-          <div class="collection-title-row">
-            <h3 class="collection-title"></h3>
-            <span class="favorite-label hidden">新收藏</span>
-          </div>
-          <p class="collection-artist"></p>
-          <p class="collection-album"></p>
-          <div class="collection-genres"></div>
-        </div>
-      </article>
-    </template>
+    <div id="toast" class="toast hidden"></div>
 
     <script src="{{ url_for('static', filename='app.js') }}"></script>
-    <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
   </body>
 </html>

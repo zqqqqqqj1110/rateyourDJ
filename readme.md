@@ -516,7 +516,43 @@ L6 执行循环判断是否重试。
 网页层会把 L5 feedback/reward 同时写入 L1 `feedback_memory` 和对应 L6
 trajectory 的 `feedback_events`。未知 trajectory ID 会在写入 L1 前被拒绝。
 
+### 生成式发现工具 discover_tracks
+
+`discover_tracks` 是把项目从"本地候选库检索"升级为"LLM-as-DJ 发现式推荐"的
+核心工具。流程是:
+
+```text
+用户画像 + 本轮意图
+    ↓
+DeepSeek 用音乐知识生成候选（artist + title + 理由），通常多生成一倍
+    ↓
+对每个候选调用 Spotify 等 provider 做事实落地（grounding）
+    ├─ 命中：保留，补全真实 track_id / 试听 / 专辑 / 年份
+    └─ 未命中：丢弃（自动过滤模型幻觉）
+    ↓
+返回 grounded 候选，并附 generated / grounded / dropped / hallucination_rate
+```
+
+要点:
+
+- 候选不再被锁死在本地 284 首,而是 DeepSeek 知识范围内、且 Spotify 可验证的
+  任何歌曲。本地 `song_profiles` 降级为缓存。
+- `dropped / generated` 即"幻觉率",是可观测、可进 eval 的指标。
+- 未配置 `DEEPSEEK_API_KEY` 时,发现引擎自动降级为
+  `TasteSeedTrackGenerator`(直接用用户收藏作为候选),保证无密钥也能跑通
+  grounding 链路。
+- 工具实现位于 `src/rateyourdj/domain/discovery.py` 和
+  `domain/generators.py`,通过 `AgentToolRegistryV1.default(..., track_generator=...)`
+  注册为模型可调用的 `discover_tracks` 工具。
+
+运行测试:
+
+```bash
+PYTHONPATH=src python3 -m unittest tests.test_discovery -v
+```
+
 ## L6 Agent 编排层规划
+
 
 L6 定义为当前 L1-L5 之上的自然语言 Agent 编排层，不直接承担模型训练。
 第一版已实现：
@@ -576,7 +612,7 @@ export DEEPSEEK_API_KEY="你的 API key"
 可选配置：
 
 ```bash
-export DEEPSEEK_MODEL="deepseek-v4-flash"
+export DEEPSEEK_MODEL="deepseek-chat"
 export DEEPSEEK_BASE_URL="https://api.deepseek.com"
 ```
 

@@ -1,746 +1,447 @@
+// rateyourDJ — 纯对话式前端
+// 对话: POST /api/v1/agent/recommend
+// 反馈/学习: POST /api/feedback/<user_id>  (favorite/like/dislike/skip/play)
+// 收藏列表: GET /api/collection/<user_id>
+// 画像/反馈统计: GET /api/profile/<user_id>, GET /api/feedback/<user_id>
+
 const state = {
   userId: "demo-user",
-  topK: 10,
-  trajectoryId: null,
   sessionId: null,
+  lastRunId: null,
+  busy: false,
+  // track_id -> { fav: bool, vote: "like"|"dislike"|null }
+  trackState: {},
+  // track_id -> track payload(给收藏/反馈带上下文，让发现的歌也能显示标题)
+  trackCache: {},
 };
 
-const $ = (selector) => document.querySelector(selector);
-const recommendations = $("#recommendations");
-const message = $("#message");
-const controls = $("#controls");
-let activePreview = null;
+const $ = (sel) => document.querySelector(sel);
+
+const stream = $("#chat-stream");
+const composer = $("#composer");
+const composerInput = $("#composer-input");
+const userIdInput = $("#user-id");
+const statusPill = $("#status-pill");
+
 let spotifyIframeApi = null;
-let pendingPreview = null;
+let pendingPreview = null; // { container, trackId }
 
 window.onSpotifyIframeApiReady = (IFrameAPI) => {
   spotifyIframeApi = IFrameAPI;
   if (pendingPreview) {
-    const preview = pendingPreview;
+    const p = pendingPreview;
     pendingPreview = null;
-    createSpotifyPreview(preview);
+    mountSpotify(p.container, p.trackId);
   }
 };
 
-controls.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  state.userId = $("#user-id").value.trim();
-  state.topK = Number($("#top-k").value);
-  state.sessionId = null;
-  await loadDashboard();
-});
+// ---------- 启动 ----------
+init();
 
-$("#agent-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const query = $("#agent-query").value.trim();
-  if (!query) {
-    showMessage("请输入你想听的内容。");
-    return;
-  }
-  state.userId = $("#user-id").value.trim();
-  setLoading(true);
-  hideMessage();
-  try {
-    const result = await getJSON(
-      "/api/v1/agent/recommend",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: state.userId,
-          message: query,
-          constraints: { limit: state.topK },
-          session_id: state.sessionId,
-          include_trace: true,
-        }),
-      }
-    );
-    state.trajectoryId = result.run_id;
-    state.sessionId = result.session_id;
-    $("#agent-response").textContent = result.message;
-    $("#agent-response").classList.remove("hidden");
-    const trace = result.trace || {};
-    const execution =
-      trace.agent_mode === "model"
-        ? `model ${trace.provider || "configured"}`
-        : trace.fallback_reason
-          ? "rules fallback"
-          : "rules";
-    $("#agent-meta").textContent =
-      `session ${result.session_id.slice(0, 8)} · run ${result.run_id.slice(0, 8)} · ${execution} · ${result.recommendations.length} 首`;
-    renderRecommendations(result);
-  } catch (error) {
-    showMessage(error.message);
-  } finally {
-    setLoading(false);
-  }
-});
-
-async function loadDashboard() {
-  if (!state.userId) {
-    showMessage("请输入用户 ID。");
-    return;
-  }
-  setLoading(true);
-  hideMessage();
-  try {
-    const [profile, feedback, collection] = await Promise.all([
-      getJSON(`/api/profile/${encodeURIComponent(state.userId)}`),
-      getJSON(`/api/feedback/${encodeURIComponent(state.userId)}`),
-      getJSON(`/api/collection/${encodeURIComponent(state.userId)}`),
-    ]);
-    renderProfile(profile, feedback);
-    renderCollection(collection);
-    recommendations.replaceChildren();
-    hideAgentDebug();
-    $("#result-meta").textContent = "等待 agent 推荐";
-    state.trajectoryId = null;
-  } catch (error) {
-    $("#collection").replaceChildren();
-    recommendations.replaceChildren();
-    showMessage(error.message);
-  } finally {
-    setLoading(false);
-  }
-}
-
-async function refreshMemoryPanels() {
-  const [profile, feedback, collection] = await Promise.all([
-    getJSON(`/api/profile/${encodeURIComponent(state.userId)}`),
-    getJSON(`/api/feedback/${encodeURIComponent(state.userId)}`),
-    getJSON(`/api/collection/${encodeURIComponent(state.userId)}`),
-  ]);
-  renderProfile(profile, feedback);
-  renderCollection(collection);
-}
-
-function renderProfile(profile, feedback) {
-  $("#collection-count").textContent = profile.collection_count;
-  $("#feedback-count").textContent = feedback.total_events;
-  $("#average-reward").textContent = feedback.average_reward.toFixed(2);
-  $("#profile-version").textContent = `v${profile.version}`;
-  renderChips("#top-artists", profile.top_artists);
-  renderChips("#top-genres", profile.top_genres);
-
-  const total = feedback.positive_events + feedback.negative_events;
-  const positive = total ? (feedback.positive_events / total) * 100 : 0;
-  const negative = total ? (feedback.negative_events / total) * 100 : 0;
-  $("#positive-bar").style.width = `${positive}%`;
-  $("#negative-bar").style.width = `${negative}%`;
-  $("#positive-count").textContent = feedback.positive_events;
-  $("#negative-count").textContent = feedback.negative_events;
-}
-
-function renderChips(selector, items) {
-  const container = $(selector);
-  container.replaceChildren();
-  if (!items.length) {
-    const empty = document.createElement("span");
-    empty.className = "chip";
-    empty.textContent = "暂无数据";
-    container.append(empty);
-    return;
-  }
-  for (const item of items) {
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.textContent = `${item.name} · ${item.weight.toFixed(2)}`;
-    container.append(chip);
-  }
-}
-
-function renderCollection(result) {
-  const collection = $("#collection");
-  collection.replaceChildren();
-  const missingSongIds = Array.isArray(result.missing_song_ids)
-    ? result.missing_song_ids
-    : [];
-  const missing = missingSongIds.length;
-  $("#collection-meta").textContent = missing
-    ? `${result.total} 首可显示 · ${missing} 首画像缺失`
-    : `${result.total} 首歌曲`;
-
-  if (!result.songs.length) {
-    const empty = document.createElement("p");
-    empty.className = "collection-empty";
-    empty.textContent = "还没有收藏歌曲。";
-    collection.append(empty);
-    return;
-  }
-
-  for (const song of result.songs) {
-    const node = $("#collection-template").content.cloneNode(true);
-    node.querySelector(".collection-title").textContent =
-      song.title || song.song_id;
-    node.querySelector(".collection-artist").textContent =
-      song.artist || "未知歌手";
-    node.querySelector(".collection-album").textContent =
-      song.album || "未知专辑";
-
-    if (song.added_via_feedback) {
-      node.querySelector(".favorite-label").classList.remove("hidden");
-    }
-
-    const genres = node.querySelector(".collection-genres");
-    for (const genre of song.genres) {
-      const item = document.createElement("span");
-      item.textContent = genre.replaceAll("_", " ");
-      genres.append(item);
-    }
-    collection.append(node);
-  }
-}
-
-function renderRecommendations(result) {
-  closeActivePreview();
-  recommendations.replaceChildren();
-  const songs = normalizeRecommendations(result);
-  const trace = result.trace || {};
-  renderAgentDebug(trace);
-  const seedSongIds = Array.isArray(trace.seed_song_ids)
-    ? trace.seed_song_ids
-    : Array.isArray(result.seed_song_ids)
-      ? result.seed_song_ids
-      : [];
-  const resultLabel = Array.isArray(result.recommendations)
-    ? "agent 推荐"
-    : "基础推荐";
-  $("#result-meta").textContent =
-    `${songs.length} 首 ${resultLabel} · ${seedSongIds.length} 首种子`;
-
-  if (!songs.length) {
-    const stopReason = trace.stop_reason || "";
-    if (result.message) {
-      showMessage(result.message);
-    } else if (stopReason === "external_search_failed") {
-      showMessage("外部音乐搜索失败，请稍后重试。");
-    } else if (stopReason === "empty_profile") {
-      showMessage("收藏中还没有可用的种子歌曲，暂时无法生成推荐。");
-    } else {
-      showMessage("当前没有可推荐歌曲。请放宽条件或换一个搜索描述。");
-    }
-    return;
-  }
-
-  for (const song of songs) {
-    const node = $("#track-template").content.cloneNode(true);
-    const card = node.querySelector(".track-card");
-    card.dataset.songId = song.songId;
-    node.querySelector(".rank-number").textContent =
-      String(song.rank).padStart(2, "0");
-    node.querySelector(".track-title").textContent = song.title || song.songId;
-    node.querySelector(".track-artist").textContent = song.artist || "未知歌手";
-    node.querySelector(".track-album").textContent = song.album || "未知专辑";
-    node.querySelector(".score-badge strong").textContent =
-      Number(song.score || 0).toFixed(3);
-
-    const reasonList = node.querySelector(".reason-list");
-    for (const reason of song.reasons) {
-      const item = document.createElement("span");
-      item.className = "reason";
-      item.textContent = reason.text;
-      reasonList.append(item);
-    }
-
-    const evidenceList = node.querySelector(".evidence-list");
-    renderEvidence(evidenceList, song.evidence);
-    node.querySelector(".ai-answer-text").textContent = buildAiAnswer(song);
-
-    const breakdown = node.querySelector(".score-breakdown");
-    for (const [name, value] of Object.entries(song.scoreBreakdown)) {
-      const item = document.createElement("div");
-      item.className = "score-item";
-      item.innerHTML = `<span>${name}</span><b>${Number(value).toFixed(3)}</b>`;
-      breakdown.append(item);
-    }
-
-    for (const button of node.querySelectorAll("[data-feedback]")) {
-      button.addEventListener("click", () =>
-        sendFeedback(card, song, button.dataset.feedback)
-      );
-    }
-    const previewButton = node.querySelector("[data-preview]");
-    if (song.previewAvailable && song.spotifyEmbedUrl && song.spotifyTrackId) {
-      previewButton.classList.remove("hidden");
-      previewButton.addEventListener("click", () =>
-        toggleSpotifyPreview(card, song, previewButton)
-      );
-    }
-    recommendations.append(node);
-  }
-}
-
-function renderAgentDebug(trace) {
-  const panel = $("#agent-debug-panel");
-  if (!trace || typeof trace !== "object") {
-    hideAgentDebug();
-    return;
-  }
-  const parsedRequest =
-    trace.parsed_request && typeof trace.parsed_request === "object"
-      ? trace.parsed_request
-      : {};
-  const anchorArtists = Array.isArray(parsedRequest.reference_artists)
-    ? parsedRequest.reference_artists.filter(Boolean)
-    : [];
-  const toolCalls = Array.isArray(trace.tool_calls) ? trace.tool_calls : [];
-  const similarArtistsCall = toolCalls.find(
-    (call) => call && call.tool === "get_similar_artists"
-  );
-  const searchCall = [...toolCalls]
-    .reverse()
-    .find((call) => call && call.tool === "search_tracks");
-  const expandedArtists = normalizeExpandedArtists(similarArtistsCall);
-  const finalSearchQuery =
-    searchCall &&
-    searchCall.arguments &&
-    typeof searchCall.arguments.query === "string"
-      ? searchCall.arguments.query
-      : "";
-  const searchPlan = normalizeSearchPlan(toolCalls);
-
-  if (
-    !anchorArtists.length &&
-    !expandedArtists.length &&
-    !finalSearchQuery &&
-    !searchPlan.length
-  ) {
-    hideAgentDebug();
-    return;
-  }
-
-  $("#debug-anchor-artists").textContent = anchorArtists.length
-    ? anchorArtists.join(", ")
-    : "—";
-  $("#debug-expanded-artists").textContent = expandedArtists.length
-    ? expandedArtists.join(", ")
-    : "—";
-  $("#debug-search-query").textContent = finalSearchQuery || "—";
-  $("#debug-search-plan").textContent = searchPlan.length
-    ? searchPlan.join(" | ")
-    : "—";
-  panel.classList.remove("hidden");
-}
-
-function normalizeExpandedArtists(similarArtistsCall) {
-  if (
-    !similarArtistsCall ||
-    !similarArtistsCall.observation ||
-    !similarArtistsCall.observation.data
-  ) {
-    return [];
-  }
-  const artists = Array.isArray(similarArtistsCall.observation.data.artists)
-    ? similarArtistsCall.observation.data.artists
-    : [];
-  const names = [];
-  for (const item of artists) {
-    if (!item || typeof item.name !== "string" || !item.name.trim()) {
-      continue;
-    }
-    const normalized = item.name.trim();
-    if (
-      !names.some((existing) => existing.toLowerCase() === normalized.toLowerCase())
-    ) {
-      names.push(normalized);
-    }
-  }
-  return names;
-}
-
-function hideAgentDebug() {
-  $("#agent-debug-panel").classList.add("hidden");
-  $("#debug-anchor-artists").textContent = "-";
-  $("#debug-expanded-artists").textContent = "-";
-  $("#debug-search-query").textContent = "-";
-  $("#debug-search-plan").textContent = "-";
-}
-
-function normalizeSearchPlan(toolCalls) {
-  const searchCalls = Array.isArray(toolCalls)
-    ? toolCalls.filter((call) => call && call.tool === "search_tracks")
-    : [];
-  return searchCalls.map((call) => {
-    const argumentsObject =
-      call.arguments && typeof call.arguments === "object"
-        ? call.arguments
-        : {};
-    const tier =
-      typeof argumentsObject.search_tier === "string" &&
-      argumentsObject.search_tier
-        ? argumentsObject.search_tier
-        : "search";
-    const query =
-      typeof argumentsObject.query === "string" ? argumentsObject.query : "";
-    const anchors = Array.isArray(argumentsObject.anchor_artists)
-      ? argumentsObject.anchor_artists.filter(Boolean)
-      : [];
-    const expanded = Array.isArray(argumentsObject.expanded_artists)
-      ? argumentsObject.expanded_artists.filter(Boolean)
-      : [];
-    const prefix = anchors.length
-      ? `${tier}[${anchors.join(", ")}]`
-      : tier;
-    const expandedSuffix = expanded.length
-      ? ` -> ${expanded.join(", ")}`
-      : "";
-    return `${prefix}${expandedSuffix}: ${query}`;
+function init() {
+  userIdInput.addEventListener("change", () => {
+    state.userId = userIdInput.value.trim() || "demo-user";
+    state.sessionId = null;
+    refreshCollection();
   });
+
+  composer.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = composerInput.value.trim();
+    if (text) sendMessage(text);
+  });
+
+  $("#suggestion-row").addEventListener("click", (event) => {
+    const button = event.target.closest(".suggestion");
+    if (button) sendMessage(button.dataset.q);
+  });
+
+  $("#open-collection").addEventListener("click", openDrawer);
+  $("#close-collection").addEventListener("click", closeDrawer);
+  $("#drawer-backdrop").addEventListener("click", closeDrawer);
+
+  state.userId = userIdInput.value.trim() || "demo-user";
+  loadStatus();
+  refreshCollection();
 }
 
-function normalizeRecommendations(result) {
-  if (Array.isArray(result.recommendations)) {
-    return result.recommendations.map((item) => {
-      const track = item.track || {};
-      const evidence = item.evidence || {};
-      return {
-        rank: item.rank,
-        songId: track.track_id,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        score: item.score,
-        scoreBreakdown: evidence.score_breakdown || {},
-        reasons: normalizeReasons(item.reasons),
-        evidence,
-        spotifyTrackId: track.external_ids?.spotify_track_id,
-        spotifyEmbedUrl: track.embed_urls?.spotify,
-        previewAvailable: Boolean(track.preview_available),
-      };
+async function loadStatus() {
+  try {
+    const status = await getJSON("/api/agent-status");
+    const model = status.model_enabled ? (status.provider || "model") : "rules";
+    const music = status.music_provider_enabled ? " · Spotify on" : "";
+    setStatus(`${model}${music}`, true);
+  } catch (error) {
+    setStatus("离线", false);
+  }
+}
+
+function setStatus(text, online) {
+  statusPill.innerHTML = `<span class="dot"></span> ${escapeHtml(text)}`;
+  statusPill.classList.toggle("offline", !online);
+}
+
+// ---------- 发送消息 ----------
+async function sendMessage(text) {
+  if (state.busy) return;
+  state.userId = userIdInput.value.trim() || "demo-user";
+  dismissWelcome();
+  appendUserBubble(text);
+  composerInput.value = "";
+  setBusy(true);
+  const thinking = appendThinking();
+
+  try {
+    const result = await getJSON("/api/v1/agent/recommend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        user_id: state.userId,
+        message: text,
+        session_id: state.sessionId,
+        constraints: { limit: 8 },
+        include_trace: true,
+      }),
     });
-  }
-
-  const rankedSongs = Array.isArray(result.ranked_songs)
-    ? result.ranked_songs
-    : [];
-  return rankedSongs.map((song) => ({
-    rank: song.rank,
-    songId: song.song_id,
-    title: song.title,
-    artist: song.artist,
-    album: null,
-    score: song.final_score,
-    scoreBreakdown: song.score_breakdown || {},
-    reasons: normalizeReasons(
-      (song.ranking_reasons || []).map((reason) => ({
-        type: "ranking",
-        text: translateReason(reason),
-      }))
-    ),
-    evidence: {
-      ranking_reasons: song.ranking_reasons || [],
-      best_seed_song_id: song.best_seed_song_id,
-      retrieval_sources: song.retrieval_sources || [],
-    },
-    spotifyTrackId: song.spotify_track_id,
-    spotifyEmbedUrl: song.spotify_embed_url,
-    previewAvailable: Boolean(song.preview_available),
-  }));
-}
-
-function normalizeReasons(reasons) {
-  if (!Array.isArray(reasons) || !reasons.length) {
-    return [{ type: "ranking", text: "根据当前画像和会话上下文选出。" }];
-  }
-  return reasons
-    .map((reason) =>
-      typeof reason === "string"
-        ? { type: "ranking", text: translateReason(reason) }
-        : {
-            type: reason.type || "ranking",
-            text: translateReason(reason.text || ""),
-          }
-    )
-    .filter((reason) => reason.text);
-}
-
-function renderEvidence(container, evidence) {
-  container.replaceChildren();
-  const items = [];
-  if (evidence.best_seed_song_id) {
-    items.push(["参考种子", evidence.best_seed_song_id]);
-  }
-  if (
-    Array.isArray(evidence.retrieval_sources) &&
-    evidence.retrieval_sources.length
-  ) {
-    items.push(["召回来源", evidence.retrieval_sources.slice(0, 2).join(", ")]);
-  }
-  if (
-    Array.isArray(evidence.preference_terms) &&
-    evidence.preference_terms.length
-  ) {
-    items.push(["请求偏好", evidence.preference_terms.slice(0, 4).join(", ")]);
-  }
-  if (!items.length) {
-    container.classList.add("hidden");
-    return;
-  }
-  container.classList.remove("hidden");
-  for (const [label, value] of items) {
-    const item = document.createElement("span");
-    const labelNode = document.createElement("b");
-    labelNode.textContent = label;
-    item.append(labelNode, String(value));
-    container.append(item);
+    state.sessionId = result.session_id;
+    state.lastRunId = result.run_id;
+    thinking.remove();
+    appendDJReply(result, text);
+  } catch (error) {
+    thinking.remove();
+    appendErrorBubble(error.message);
+  } finally {
+    setBusy(false);
   }
 }
 
-function buildAiAnswer(song) {
-  const parts = [];
-  const mainReason = song.reasons[0]?.text;
-  if (mainReason) {
-    parts.push(mainReason);
-  }
-  if (song.album && song.album !== "未知专辑") {
-    parts.push(`它来自《${song.album}》`);
-  }
-  if (song.evidence?.preference_terms?.length) {
-    parts.push(
-      `和你这次提到的 ${song.evidence.preference_terms.slice(0, 3).join("、")} 更接近`
-    );
-  }
-  if (song.evidence?.retrieval_sources?.length) {
-    const source = song.evidence.retrieval_sources[0];
-    parts.push(
-      source.includes("search")
-        ? "这首歌是 agent 通过外部音乐搜索工具找到的"
-        : "这首歌来自当前候选召回"
-    );
-  }
-  if (!parts.length) {
-    return "我选择这首歌，是因为它在当前偏好、会话上下文和可用证据中匹配度最高。";
-  }
-  return `${parts.join("；")}。`;
+// ---------- 渲染：消息气泡 ----------
+function appendUserBubble(text) {
+  const row = el("div", "msg msg-user");
+  row.appendChild(el("div", "bubble bubble-user", text));
+  stream.appendChild(row);
+  scrollToBottom();
 }
 
-function toggleSpotifyPreview(card, song, button) {
-  const player = card.querySelector(".spotify-player");
-  const mount = player.querySelector(".spotify-embed-mount");
-  const isActive = activePreview && activePreview.card === card;
-  closeActivePreview();
-  if (isActive) {
-    return;
-  }
-  player.classList.remove("hidden");
-  button.textContent = "收起试听";
-  button.classList.add("is-playing");
-  const preview = {
-    card,
-    player,
-    mount,
-    button,
-    song,
-    controller: null,
-    playbackStarted: false,
-    playRecorded: false,
-    completeRecorded: false,
-    quickSkipRecorded: false,
-    maxPosition: 0,
-    duration: 0,
-  };
-  activePreview = preview;
-  if (spotifyIframeApi) {
-    createSpotifyPreview(preview);
+function appendThinking() {
+  const row = el("div", "msg msg-dj");
+  const bubble = el("div", "bubble bubble-dj thinking");
+  bubble.innerHTML =
+    '<span class="dj-avatar">DJ</span><span class="dots"><i></i><i></i><i></i></span>';
+  row.appendChild(bubble);
+  stream.appendChild(row);
+  scrollToBottom();
+  return row;
+}
+
+function appendErrorBubble(text) {
+  const row = el("div", "msg msg-dj");
+  const bubble = el("div", "bubble bubble-dj error");
+  bubble.textContent = `出错了：${text}`;
+  row.appendChild(bubble);
+  stream.appendChild(row);
+  scrollToBottom();
+}
+
+function appendDJReply(result, query) {
+  const row = el("div", "msg msg-dj");
+  const bubble = el("div", "bubble bubble-dj");
+
+  const head = el("div", "dj-head");
+  head.innerHTML = '<span class="dj-avatar">DJ</span>';
+  const note = el("p", "dj-note", result.message || "为你挑了几首：");
+  head.appendChild(note);
+  bubble.appendChild(head);
+
+  const recs = result.recommendations || [];
+  if (recs.length === 0) {
+    bubble.appendChild(el("p", "dj-empty", "这次没找到合适的歌，换个说法试试？"));
   } else {
-    mount.textContent = "Spotify 播放器载入中…";
-    pendingPreview = preview;
+    const cards = el("div", "track-cards");
+    recs.forEach((rec) => cards.appendChild(buildTrackCard(rec)));
+    bubble.appendChild(cards);
+
+    const actions = el("div", "reply-actions");
+    const more = el("button", "chip-button", "换一批");
+    more.type = "button";
+    more.addEventListener("click", () =>
+      sendMessage("换一批，不要重复刚才推荐过的歌")
+    );
+    actions.appendChild(more);
+    bubble.appendChild(actions);
   }
+
+  row.appendChild(bubble);
+  stream.appendChild(row);
+  scrollToBottom();
 }
 
-function createSpotifyPreview(preview) {
-  if (activePreview !== preview || !spotifyIframeApi) {
+// ---------- 渲染：歌曲卡片 ----------
+function buildTrackCard(rec) {
+  const track = rec.track || {};
+  const trackId = track.track_id || `unknown-${Math.random().toString(36).slice(2)}`;
+  state.trackCache[trackId] = track;
+  if (!state.trackState[trackId]) state.trackState[trackId] = { fav: false, vote: null };
+
+  const card = el("div", "track-card");
+  card.dataset.trackId = trackId;
+
+  // 头部：曲名 / 艺人 / 排名
+  const main = el("div", "track-main");
+  const titleWrap = el("div", "track-title-wrap");
+  titleWrap.appendChild(el("div", "track-title", track.title || "未知曲目"));
+  const sub = [track.artist, track.album].filter(Boolean).join(" · ");
+  titleWrap.appendChild(el("div", "track-sub", sub || "未知艺人"));
+  main.appendChild(titleWrap);
+  if (rec.rank) main.appendChild(el("span", "track-rank", `#${rec.rank}`));
+  card.appendChild(main);
+
+  // 推荐理由
+  const reasons = (rec.reasons || []).filter((r) => r && r.text).slice(0, 2);
+  if (reasons.length) {
+    const reasonWrap = el("div", "track-reasons");
+    reasons.forEach((r) => reasonWrap.appendChild(el("p", "reason", r.text)));
+    card.appendChild(reasonWrap);
+  }
+
+  // 试听
+  const playRow = el("div", "track-play");
+  if (track.preview_available && track.external_ids && track.external_ids.spotify_track_id) {
+    const playBtn = el("button", "play-button", "▶ 试听");
+    playBtn.type = "button";
+    const slot = el("div", "spotify-slot");
+    playBtn.addEventListener("click", () => {
+      playBtn.style.display = "none";
+      mountSpotify(slot, track.external_ids.spotify_track_id);
+    });
+    playRow.appendChild(playBtn);
+    playRow.appendChild(slot);
+  } else {
+    const link = track.external_urls && track.external_urls.spotify;
+    if (link) {
+      const a = el("a", "play-link", "在 Spotify 打开 ↗");
+      a.href = link;
+      a.target = "_blank";
+      a.rel = "noopener";
+      playRow.appendChild(a);
+    } else {
+      playRow.appendChild(el("span", "no-preview", "暂无试听"));
+    }
+  }
+  card.appendChild(playRow);
+
+  // 反馈按钮
+  const fb = el("div", "track-feedback");
+  const ts = state.trackState[trackId];
+
+  const fav = iconButton("♥", "收藏", ts.fav);
+  fav.addEventListener("click", () => toggleFavorite(trackId, fav));
+
+  const like = iconButton("👍", "喜欢", ts.vote === "like");
+  const dislike = iconButton("👎", "不喜欢", ts.vote === "dislike");
+  like.addEventListener("click", () => vote(trackId, "like", like, dislike));
+  dislike.addEventListener("click", () => vote(trackId, "dislike", like, dislike));
+
+  const skip = iconButton("⤳", "跳过", false);
+  skip.addEventListener("click", () => {
+    sendFeedback(trackId, "skip");
+    card.classList.add("skipped");
+    toast("已跳过，这类我会少推");
+  });
+
+  fb.append(fav, like, dislike, skip);
+  card.appendChild(fb);
+  return card;
+}
+
+function iconButton(glyph, label, active) {
+  const b = el("button", "fb-button", glyph);
+  b.type = "button";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  if (active) b.classList.add("active");
+  return b;
+}
+
+// ---------- Spotify 内嵌试听 ----------
+function mountSpotify(container, spotifyTrackId) {
+  if (!spotifyIframeApi) {
+    pendingPreview = { container, trackId: spotifyTrackId };
+    container.innerHTML = '<div class="spotify-loading">加载播放器…</div>';
     return;
   }
-  preview.mount.replaceChildren();
+  container.innerHTML = "";
   spotifyIframeApi.createController(
-    preview.mount,
+    container,
     {
+      uri: `spotify:track:${spotifyTrackId}`,
       width: "100%",
-      height: 152,
-      uri: `spotify:track:${preview.song.spotifyTrackId}`,
+      height: 80,
     },
-    (controller) => {
-      if (activePreview !== preview) {
-        controller.destroy();
-        return;
-      }
-      preview.controller = controller;
-      controller.addListener("playback_started", () => {
-        preview.playbackStarted = true;
-        if (!preview.playRecorded) {
-          preview.playRecorded = true;
-          void recordPlaybackFeedback(preview, "play");
-        }
-      });
-      controller.addListener("playback_update", (event) => {
-        const position = Number(event.data?.position || 0);
-        const duration = Number(event.data?.duration || 0);
-        preview.maxPosition = Math.max(preview.maxPosition, position);
-        preview.duration = Math.max(preview.duration, duration);
-        if (
-          !preview.completeRecorded &&
-          duration > 0 &&
-          position >= duration * 0.9
-        ) {
-          preview.completeRecorded = true;
-          void recordPlaybackFeedback(preview, "play_complete");
-        }
-      });
-    }
+    () => {}
   );
 }
 
-function closeActivePreview() {
-  if (!activePreview) {
-    return;
+// ---------- 反馈 / 学习 ----------
+async function toggleFavorite(trackId, button) {
+  const ts = state.trackState[trackId];
+  ts.fav = !ts.fav;
+  button.classList.toggle("active", ts.fav);
+  if (ts.fav) {
+    await sendFeedback(trackId, "favorite");
+    toast("已收藏 ♥");
+    refreshCollection();
+  } else {
+    toast("已取消收藏");
   }
-  const preview = activePreview;
-  if (
-    preview.playbackStarted &&
-    !preview.completeRecorded &&
-    !preview.quickSkipRecorded &&
-    preview.maxPosition < 15000
-  ) {
-    preview.quickSkipRecorded = true;
-    void recordPlaybackFeedback(preview, "quick_skip");
-  }
-  if (preview.controller) {
-    preview.controller.destroy();
-  }
-  const mount = document.createElement("div");
-  mount.className = "spotify-embed-mount";
-  preview.player.replaceChildren(mount);
-  preview.player.classList.add("hidden");
-  preview.button.textContent = "试听";
-  preview.button.classList.remove("is-playing");
-  if (pendingPreview === preview) {
-    pendingPreview = null;
-  }
-  activePreview = null;
 }
 
-async function recordPlaybackFeedback(preview, feedbackType) {
+async function vote(trackId, kind, likeBtn, dislikeBtn) {
+  const ts = state.trackState[trackId];
+  ts.vote = ts.vote === kind ? null : kind;
+  likeBtn.classList.toggle("active", ts.vote === "like");
+  dislikeBtn.classList.toggle("active", ts.vote === "dislike");
+  if (ts.vote === kind) {
+    await sendFeedback(trackId, kind === "like" ? "like" : "dislike");
+    toast(kind === "like" ? "记下了，你喜欢这种 👍" : "记下了，少推这种 👎");
+  }
+}
+
+async function sendFeedback(trackId, feedbackType) {
+  const track = state.trackCache[trackId] || {};
   try {
     await getJSON(`/api/feedback/${encodeURIComponent(state.userId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        song_id: preview.song.songId,
+        song_id: trackId,
         feedback_type: feedbackType,
         recommendation_context: {
-          rank: preview.song.rank,
-          final_score: preview.song.score,
-          source: "spotify_embed",
-          trajectory_id: state.trajectoryId,
-          playback_position_ms: Math.round(preview.maxPosition),
-          playback_duration_ms: Math.round(preview.duration),
+          run_id: state.lastRunId,
+          session_id: state.sessionId,
+          track: {
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+          },
         },
       }),
     });
   } catch (error) {
-    console.warn(`无法记录 ${feedbackType} 试听事件`, error);
+    toast(`反馈失败：${error.message}`);
   }
 }
 
-async function sendFeedback(card, song, feedbackType) {
-  const buttons = card.querySelectorAll("button");
-  buttons.forEach((button) => { button.disabled = true; });
-  hideMessage();
-  const context = {
-    rank: song.rank,
-    final_score: song.score,
-    source: "web",
-    trajectory_id: state.trajectoryId,
-  };
-  if (["favorite", "playlist_add"].includes(feedbackType)) {
-    context.track = {
-      title: song.title,
-      artist: song.artist,
-      album: song.album,
-      spotify_track_id: song.spotifyTrackId,
-    };
-  }
+// ---------- 收藏抽屉 ----------
+function openDrawer() {
+  $("#collection-drawer").classList.remove("hidden");
+  $("#collection-drawer").setAttribute("aria-hidden", "false");
+  $("#drawer-backdrop").classList.remove("hidden");
+  refreshCollection();
+}
+
+function closeDrawer() {
+  $("#collection-drawer").classList.add("hidden");
+  $("#collection-drawer").setAttribute("aria-hidden", "true");
+  $("#drawer-backdrop").classList.add("hidden");
+}
+
+async function refreshCollection() {
   try {
-    await getJSON(`/api/feedback/${encodeURIComponent(state.userId)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        song_id: song.songId,
-        feedback_type: feedbackType,
-        recommendation_context: context,
-      }),
-    });
-    card.classList.add("feedback-sent");
-    if (["favorite", "playlist_add"].includes(feedbackType)) {
-      const favoriteButton = card.querySelector('[data-feedback="favorite"]');
-      if (favoriteButton) {
-        favoriteButton.textContent = "已收藏";
-        favoriteButton.disabled = true;
-      }
+    const [collection, feedback] = await Promise.all([
+      getJSON(`/api/collection/${encodeURIComponent(state.userId)}`),
+      getJSON(`/api/feedback/${encodeURIComponent(state.userId)}`).catch(() => null),
+    ]);
+    renderCollection(collection);
+    $("#collection-badge").textContent = collection.total || 0;
+    $("#stat-collection").textContent = collection.total || 0;
+    if (feedback) {
+      $("#stat-feedback").textContent = feedback.total_events ?? 0;
+      const reward = Number(feedback.average_reward || 0);
+      $("#stat-reward").textContent = reward.toFixed(2);
     }
-    await refreshMemoryPanels();
-    buttons.forEach((button) => {
-      if (
-        !["favorite", "playlist_add"].includes(feedbackType) ||
-        button.dataset.feedback !== "favorite"
-      ) {
-        button.disabled = false;
-      }
-    });
   } catch (error) {
-    showMessage(error.message);
-    buttons.forEach((button) => { button.disabled = false; });
+    // 用户画像可能还不存在(新用户)，静默处理
+    $("#collection-badge").textContent = "0";
   }
+}
+
+function renderCollection(collection) {
+  const list = $("#collection-list");
+  const songs = collection.songs || [];
+  if (songs.length === 0) {
+    list.innerHTML =
+      '<p class="drawer-empty">还没有收藏。点歌曲卡片上的 ♥ 就会出现在这里。</p>';
+    return;
+  }
+  list.replaceChildren();
+  songs.forEach((song) => {
+    const item = el("div", "collection-item");
+    item.appendChild(el("div", "ci-title", song.title || "未知曲目"));
+    const sub = [song.artist, song.album].filter(Boolean).join(" · ");
+    item.appendChild(el("div", "ci-sub", sub || "未知艺人"));
+    if (Array.isArray(song.genres) && song.genres.length) {
+      const tags = el("div", "ci-tags");
+      song.genres.slice(0, 3).forEach((g) => tags.appendChild(el("span", "ci-tag", g)));
+      item.appendChild(tags);
+    }
+    list.appendChild(item);
+  });
+}
+
+// ---------- 工具函数 ----------
+function dismissWelcome() {
+  const welcome = $("#welcome");
+  if (welcome) welcome.remove();
+}
+
+function setBusy(busy) {
+  state.busy = busy;
+  $("#composer-send").disabled = busy;
+  composerInput.disabled = busy;
+}
+
+function scrollToBottom() {
+  requestAnimationFrame(() => {
+    stream.scrollTop = stream.scrollHeight;
+  });
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function escapeHtml(value) {
+  const div = document.createElement("div");
+  div.textContent = String(value);
+  return div.innerHTML;
+}
+
+let toastTimer = null;
+function toast(text) {
+  const node = $("#toast");
+  node.textContent = text;
+  node.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => node.classList.add("hidden"), 2200);
 }
 
 async function getJSON(url, options) {
   const response = await fetch(url, options);
-  const payload = await response.json().catch(() => ({}));
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = null;
+  }
   if (!response.ok) {
-    throw new Error(payload.error || `请求失败 (${response.status})`);
+    const message =
+      (data && (data.error?.message || data.error)) ||
+      `请求失败 (${response.status})`;
+    throw new Error(message);
   }
-  return payload;
+  return data;
 }
-
-function setLoading(value) {
-  document.body.classList.toggle("loading", value);
-  controls.querySelector("button").disabled = value;
-}
-
-function showMessage(text) {
-  message.textContent = text;
-  message.classList.remove("hidden");
-}
-
-function hideMessage() {
-  message.classList.add("hidden");
-}
-
-function translateReason(reason) {
-  if (reason.startsWith("Matches the current request preferences: ")) {
-    return reason.replace(
-      "Matches the current request preferences: ",
-      "匹配本次请求偏好："
-    );
-  }
-  const reasons = {
-    "strong similarity to the collection seeds": "与收藏高度相似",
-    "retrieved from collection-level song similarity": "收藏相似度召回",
-    "matches a preferred artist": "匹配偏好歌手",
-    "matches the collection genre profile": "匹配流派画像",
-    "matches the collection tag profile": "匹配标签画像",
-    "high-confidence song profile": "高置信歌曲画像",
-    "promoted by positive feedback": "正反馈提升",
-    "penalized by negative feedback": "负反馈降低",
-    "penalized for similarity to higher-ranked songs": "多样性调整",
-    "selected from the L3 candidate pool": "来自候选池",
-    "found by external music provider search": "由外部音乐搜索工具找到",
-    "matches the current listening request": "匹配当前收听请求",
-    "matches user music profile": "匹配用户音乐画像",
-    "has enough metadata for explanation": "具备可解释的歌曲元数据",
-  };
-  return reasons[reason] || reason;
-}
-
-loadDashboard();

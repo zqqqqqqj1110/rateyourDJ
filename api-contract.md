@@ -311,7 +311,7 @@ Returns backend capability status.
 {
   "agent_mode": "auto",
   "model_enabled": true,
-  "provider": "deepseek:deepseek-v4-flash",
+  "provider": "deepseek:deepseek-chat",
   "music_providers": {
     "spotify": true,
     "lastfm": true,

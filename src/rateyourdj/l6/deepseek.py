@@ -17,7 +17,7 @@ from .provider import (
 
 
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEFAULT_TIMEOUT_SECONDS = 45
 
 DeepSeekRequest = Callable[[dict[str, Any]], dict[str, Any]]

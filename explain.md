@@ -1201,7 +1201,7 @@ PYTHONPATH=src python3 -m rateyourdj.l6.cli \
 可选环境变量：
 
 ```text
-DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_MODEL=deepseek-chat
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 ```
 

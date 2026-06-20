@@ -50,6 +50,24 @@ def apply_request_patch(
         raise AgentLoopError("model cannot cancel the requested more intent")
     if request.exclude_seen and patch.get("exclude_seen", True) is not True:
         raise AgentLoopError("model cannot include songs already shown")
+    # Adding reference artists / refinement notes the query did not imply is not
+    # a safety violation (unlike overriding count or diversity). Rather than
+    # collapsing the whole model run to rules, drop the unsupported field.
+    patch = dict(patch)
+    if (
+        not request.reference_artists
+        and patch.get("reference_artists")
+        and not query_implies_similarity_reference(request.query)
+    ):
+        patch.pop("reference_artists", None)
+    if (
+        not request.refinement_notes
+        and patch.get("refinement_notes")
+        and not query_implies_refinement(request.query)
+    ):
+        patch.pop("refinement_notes", None)
+    if not patch:
+        return request
     if "exclude_terms" in patch and not isinstance(
         patch["exclude_terms"],
         list,
@@ -245,6 +263,23 @@ def query_implies_refinement(query: str) -> bool:
         "more like",
     )
     return any(marker in lowered for marker in markers)
+
+
+def query_implies_similarity_reference(query: str) -> bool:
+    lowered = query.casefold()
+    return any(
+        marker in lowered
+        for marker in (
+            "像",
+            "更像",
+            "类似",
+            "差不多",
+            "same vibe",
+            "similar to",
+            "more like",
+            "like ",
+        )
+    )
 
 
 def unique(values: list[str]) -> list[str]:

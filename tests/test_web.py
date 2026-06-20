@@ -291,6 +291,62 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("user_id", response.get_json()["error"])
 
+    def test_v1_agent_feedback_records_event(self) -> None:
+        recommend = self.client.post(
+            "/api/v1/agent/recommend",
+            json={
+                "user_id": "user-1",
+                "message": "推荐一首摇滚",
+                "constraints": {"limit": 1},
+            },
+        )
+        run_id = recommend.get_json()["run_id"]
+
+        response = self.client.post(
+            "/api/v1/agent/feedback",
+            json={
+                "user_id": "user-1",
+                "track_id": "candidate",
+                "event": "like",
+                "run_id": run_id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.get_json()
+        self.assertEqual(payload["track_id"], "candidate")
+        self.assertEqual(payload["event"], "like")
+        self.assertEqual(payload["reward_score"], 0.6)
+        self.assertEqual(payload["run_id"], run_id)
+
+    def test_v1_agent_session_returns_state(self) -> None:
+        # Run a recommendation so a session exists.
+        recommend = self.client.post(
+            "/api/v1/agent/recommend",
+            json={
+                "user_id": "user-1",
+                "message": "推荐一首摇滚",
+                "constraints": {"limit": 1},
+            },
+        )
+        session_id = recommend.get_json()["session_id"]
+
+        response = self.client.get(
+            f"/api/v1/agent/session/{session_id}?user_id=user-1"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["session_id"], session_id)
+        self.assertEqual(payload["user_id"], "user-1")
+        self.assertGreaterEqual(payload["turn_count"], 1)
+
+    def test_v1_agent_session_requires_user_id(self) -> None:
+        response = self.client.get("/api/v1/agent/session/some-session")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("user_id", response.get_json()["error"])
+
     def test_chat_session_supports_more_without_repeating_songs(self) -> None:
         first = self.client.post(
             "/api/chat/user-1",

@@ -36,6 +36,7 @@ def validated_model_tool_arguments(
         "update_session_memory",
         "propose_memory_update",
         "commit_memory_update",
+        "discover_tracks",
         "L3.retrieve_candidates",
         "get_similar_tracks",
         "L4.rank_candidates",
@@ -153,6 +154,28 @@ def validated_model_tool_arguments(
             )
         _require_non_empty_string(arguments, "proposal_id")
         _require_non_empty_string(arguments, "run_id")
+        return arguments
+
+    if tool_name == "discover_tracks":
+        allowed = {"user_id", "intent", "limit", "exclude_artists"}
+        if not set(arguments) <= allowed:
+            raise AgentLoopError("discover_tracks arguments contain unknown fields")
+        intent = arguments.get("intent")
+        if not isinstance(intent, str) or not intent.strip():
+            raise AgentLoopError("intent must be a non-empty string")
+        limit = arguments.get("limit", min(request.top_k * 2, 50))
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 50
+        ):
+            raise AgentLoopError("limit must be between 1 and 50")
+        arguments["limit"] = limit
+        exclude_artists = arguments.get("exclude_artists")
+        if exclude_artists is not None and not _is_string_list_allow_empty(
+            exclude_artists
+        ):
+            raise AgentLoopError("exclude_artists must be a string list")
         return arguments
 
     if tool_name == "search_tracks":

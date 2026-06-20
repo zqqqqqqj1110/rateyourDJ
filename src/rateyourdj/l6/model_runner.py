@@ -59,10 +59,56 @@ def execute_model_loop(
     profile_empty = False
     executed_calls: set[tuple[str, str]] = set()
     last_ranked_request: AgentRequest | None = None
-    provider_search_available = "search_tracks" in set(tool_registry.names())
+    tool_names = set(tool_registry.names())
+    discovery_available = "discover_tracks" in tool_names
+    provider_search_available = "search_tracks" in tool_names
+    external_candidates_available = discovery_available or provider_search_available
 
     model_step_limit = min(max_steps, 5)
-    if provider_search_available:
+    # Generative discovery is the primary path: DeepSeek proposes songs from the
+    # user's taste, then the provider grounds them. Run it before the model's
+    # own tool selection (and before keyword search) when available.
+    if discovery_available:
+        discovery_args = {
+            "user_id": user_id,
+            "intent": request.query,
+            "limit": min(max(request.top_k * 2, request.top_k), 50),
+        }
+        executed_calls.add(
+            ("discover_tracks", _stable_arguments(discovery_args))
+        )
+        best = _run_discovery(
+            user_id=user_id,
+            request=request,
+            session=session,
+            steps=steps,
+            tool_registry=tool_registry,
+            apply_query_filters=apply_query_filters,
+            arguments=discovery_args,
+            decision_source="program_discovery_first",
+        )
+        decisions.append(
+            {
+                "kind": "program_discovery_first",
+                "summary": (
+                    "program ran generative discovery (LLM proposes, provider "
+                    "grounds) before model tool selection"
+                ),
+                "decision_index": 0,
+            }
+        )
+        if len(best) >= request.top_k:
+            return (
+                request,
+                best[: request.top_k],
+                seed_song_ids,
+                missing_seed_song_ids,
+                rank_attempts,
+                "goal_satisfied",
+                None,
+                decisions,
+            )
+    elif provider_search_available:
         executed_calls.add(
             (
                 "search_tracks",
@@ -135,7 +181,7 @@ def execute_model_loop(
             )
             continue
         except LLMProviderError as error:
-            if provider_search_available:
+            if external_candidates_available:
                 validation_feedback.append(
                     f"provider response unavailable after external search: {error}"
                 )
@@ -177,7 +223,7 @@ def execute_model_loop(
                 best,
                 request=request,
                 session=session,
-                provider_search_available=provider_search_available,
+                provider_search_available=external_candidates_available,
                 apply_query_filters=apply_query_filters,
             )
             if len(eligible) >= request.top_k:
@@ -208,15 +254,16 @@ def execute_model_loop(
             )
             continue
 
-        if provider_search_available and str(decision.tool_name) in {
+        if external_candidates_available and str(decision.tool_name) in {
             "L3.retrieve_candidates",
             "get_similar_tracks",
             "L4.rank_candidates",
             "rank_candidates",
         }:
+            preferred = "discover_tracks" if discovery_available else "search_tracks"
             validation_feedback.append(
-                f"{decision.tool_name} ignored because external provider "
-                "search is enabled; use search_tracks with a different query"
+                f"{decision.tool_name} ignored because external candidate "
+                f"discovery is enabled; use {preferred} with a different intent"
             )
             continue
 
@@ -251,14 +298,18 @@ def execute_model_loop(
 
         if observation.tool in {"L1.inspect_user_profile", "get_user_memory"}:
             profile_empty = observation.status == "empty"
-        if observation.tool == "search_tracks":
+        if observation.tool in {"search_tracks", "discover_tracks"}:
             user_memory = _latest_user_memory_from_steps(steps)
             similar_artist_candidates = _similar_artist_items_from_steps(
                 steps=steps,
                 request=request,
             )
+            if observation.tool == "discover_tracks":
+                source_tracks = observation.data.get("provider_tracks", [])
+            else:
+                source_tracks = observation.data.get("tracks", [])
             provider_ranked = _rank_provider_tracks(
-                observation.data.get("tracks", []),
+                source_tracks,
                 request=request,
                 user_memory=user_memory,
                 similar_artist_candidates=similar_artist_candidates,
@@ -273,7 +324,7 @@ def execute_model_loop(
             if len(eligible) > len(best):
                 best = eligible
             validation_feedback.append(
-                f"search_tracks produced {len(eligible)} eligible external "
+                f"{observation.tool} produced {len(eligible)} eligible external "
                 f"tracks for requested top_k={request.top_k}"
             )
             if len(eligible) >= request.top_k:
@@ -344,11 +395,11 @@ def execute_model_loop(
         best,
         request=request,
         session=session,
-        provider_search_available=provider_search_available,
+        provider_search_available=external_candidates_available,
         apply_query_filters=apply_query_filters,
     )
     if (
-        not provider_search_available
+        not external_candidates_available
         and
         not profile_empty
         and (last_ranked_request is None or last_ranked_request != request)
@@ -405,6 +456,63 @@ def _stable_arguments(arguments: dict[str, Any]) -> str:
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+    )
+
+
+def _run_discovery(
+    *,
+    user_id: str,
+    request: AgentRequest,
+    session: Any,
+    steps: list[dict[str, Any]],
+    tool_registry: ToolRegistry,
+    apply_query_filters: QueryFilter,
+    arguments: dict[str, Any],
+    decision_source: str,
+) -> list[dict[str, Any]]:
+    """Run generative discovery (LLM proposes, provider grounds) program-first.
+
+    Reads user memory, calls the ``discover_tracks`` tool, then ranks and filters
+    the grounded provider tracks with the same logic the model loop uses when it
+    chooses ``discover_tracks`` itself.
+    """
+    memory = _read_user_memory(
+        user_id=user_id,
+        steps=steps,
+        tool_registry=tool_registry,
+        decision_source=decision_source,
+    )
+    observation = tool_registry.call("discover_tracks", **arguments)
+    steps.append(
+        {
+            "step": len(steps) + 1,
+            "tool": observation.tool,
+            "loop_contract": LOOP_CONTRACT_VERSION,
+            "loop_phase": loop_phase_for_tool(observation.tool),
+            "arguments": dict(arguments),
+            "observation": observation.to_dict(),
+            "decision": (
+                "run generative discovery (LLM proposes, provider grounds) "
+                "before model tool selection"
+            ),
+            "decision_source": decision_source,
+        }
+    )
+    similar_artist_candidates = _similar_artist_items_from_steps(
+        steps=steps,
+        request=request,
+    )
+    source_tracks = observation.data.get("provider_tracks", [])
+    provider_ranked = _rank_provider_tracks(
+        source_tracks,
+        request=request,
+        user_memory=memory,
+        similar_artist_candidates=similar_artist_candidates,
+    )
+    return _filter_external_candidates(
+        provider_ranked,
+        request,
+        session=session,
     )
 
 
@@ -490,8 +598,10 @@ def _filter_external_candidates(
     eligible: list[dict[str, Any]] = []
     artist_counts: dict[str, int] = {}
     family_counts: dict[str, int] = {}
+    cluster_counts: dict[str, int] = {}
     seen_signatures: set[str] = set(context.excluded_track_signatures)
     family_limit = _external_family_limit(request)
+    cluster_limit = _external_cluster_limit(request)
     for song in ranked_songs:
         song_id = str(song.get("song_id") or "")
         if not song_id or song_id in context.excluded_song_ids:
@@ -522,10 +632,19 @@ def _filter_external_candidates(
             and family_counts.get(family_key, 0) >= family_limit
         ):
             continue
+        cluster_key = _external_cluster_key(song)
+        if (
+            cluster_key
+            and cluster_limit > 0
+            and cluster_counts.get(cluster_key, 0) >= cluster_limit
+        ):
+            continue
         if artist:
             artist_counts[artist] = artist_counts.get(artist, 0) + 1
         if family_key:
             family_counts[family_key] = family_counts.get(family_key, 0) + 1
+        if cluster_key:
+            cluster_counts[cluster_key] = cluster_counts.get(cluster_key, 0) + 1
         enriched = dict(song)
         evidence = dict(enriched.get("evidence") or {})
         evidence.update(context.evidence())
@@ -533,7 +652,7 @@ def _filter_external_candidates(
         if signature:
             seen_signatures.add(signature)
         eligible.append(enriched)
-    return eligible
+    return _apply_external_adjacency_diversity(eligible)
 
 
 def _external_song_matches(song: dict[str, Any], term: str) -> bool:
@@ -558,14 +677,17 @@ def _external_candidate_is_relevant(
     score_breakdown = song.get("score_breakdown")
     if not isinstance(score_breakdown, dict):
         return True
+    reference_match = float(score_breakdown.get("reference_match") or 0.0) > 0.0
+    expanded_reference_match = (
+        float(score_breakdown.get("expanded_reference_match") or 0.0) > 0.0
+    )
+    if request.reference_artists and _query_implies_similarity_reference(
+        request.query
+    ):
+        return reference_match or expanded_reference_match
     semantic_match = any(
         float(score_breakdown.get(key) or 0.0) > 0.0
-        for key in (
-            "query_match",
-            "reference_match",
-            "expanded_reference_match",
-            "profile_match",
-        )
+        for key in ("query_match", "reference_match", "expanded_reference_match", "profile_match")
     )
     if semantic_match:
         return True
@@ -1152,6 +1274,8 @@ def _rank_provider_tracks(
         artist_label = artist.casefold()
         reference_match = any(anchor == artist_label for anchor in reference_artists)
         expanded_reference_match = artist_label in expanded_reference_artists
+        version_label = _external_version_label(track)
+        version_penalty = _external_version_penalty(track)
         profile_score, profile_matches = _profile_match_score(
             artist=artist,
             tags=tags,
@@ -1172,6 +1296,7 @@ def _rank_provider_tracks(
             "profile_match": round(profile_score * 0.25, 3),
             "metadata_quality": 0.15 if track.get("album") else 0.08,
             "multi_query_match": round(multi_query_boost, 3),
+            "version_penalty": round(-version_penalty, 3),
         }
         final_score = min(1.0, round(sum(score_breakdown.values()), 3))
         ranked.append(
@@ -1215,6 +1340,16 @@ def _rank_provider_tracks(
                     track.get("search_expanded_artists", [])
                 ),
                 "artist_family_key": _artist_family_key(artist),
+                "cluster_key": (
+                    artist_label
+                    if reference_match or expanded_reference_match
+                    else (
+                        _first_casefolded(track.get("search_expanded_artists"))
+                        or _first_casefolded(track.get("search_anchor_artists"))
+                        or artist_label
+                    )
+                ),
+                "version_label": version_label,
             }
         )
     ranked.sort(
@@ -1342,6 +1477,8 @@ def _provider_reasons(
         reasons.append("matches the current listening request")
     if profile_matches:
         reasons.append("matches user music profile")
+    if _external_version_label(track) == "album_cut":
+        reasons.append("prefers the main album/studio version")
     if track.get("album") or track.get("release_year"):
         reasons.append("has enough metadata for explanation")
     return reasons
@@ -1465,20 +1602,26 @@ def _apply_external_diversity_penalties(
 ) -> list[dict[str, Any]]:
     family_counts: dict[str, int] = {}
     signature_counts: dict[str, int] = {}
+    cluster_counts: dict[str, int] = {}
     adjusted: list[dict[str, Any]] = []
     for song in ranked:
         adjusted_song = dict(song)
         family_key = str(adjusted_song.get("artist_family_key") or "")
+        cluster_key = _external_cluster_key(adjusted_song)
         signature = _external_track_signature(adjusted_song)
         family_penalty = 0.0
         signature_penalty = 0.0
+        cluster_penalty = 0.0
         if family_key:
             family_penalty = 0.12 * family_counts.get(family_key, 0)
             family_counts[family_key] = family_counts.get(family_key, 0) + 1
+        if cluster_key:
+            cluster_penalty = 0.06 * cluster_counts.get(cluster_key, 0)
+            cluster_counts[cluster_key] = cluster_counts.get(cluster_key, 0) + 1
         if signature:
             signature_penalty = 0.20 * signature_counts.get(signature, 0)
             signature_counts[signature] = signature_counts.get(signature, 0) + 1
-        penalty = round(family_penalty + signature_penalty, 3)
+        penalty = round(family_penalty + cluster_penalty + signature_penalty, 3)
         adjusted_song["diversity_penalty"] = penalty
         adjusted_song["final_score"] = max(
             0.0,
@@ -1492,6 +1635,7 @@ def _apply_external_diversity_penalties(
             str(song.get("title") or "").casefold(),
         )
     )
+    adjusted = _apply_external_adjacency_diversity(adjusted)
     for index, song in enumerate(adjusted, start=1):
         song["rank"] = index
     return adjusted
@@ -1501,6 +1645,92 @@ def _external_track_signature(song: dict[str, Any]) -> str:
     from .session_ranking import track_signature_from_ranked_song
 
     return track_signature_from_ranked_song(song)
+
+
+def _external_cluster_limit(request: AgentRequest) -> int:
+    if request.reference_artists and _query_implies_similarity_reference(
+        request.query
+    ):
+        return 2
+    return max(2, request.max_per_artist)
+
+
+def _external_cluster_key(song: dict[str, Any]) -> str:
+    explicit_cluster = str(song.get("cluster_key") or "").strip().casefold()
+    if explicit_cluster:
+        return explicit_cluster
+    anchors = [
+        str(item).strip().casefold()
+        for item in song.get("search_anchor_artists", [])
+        if str(item).strip()
+    ]
+    if anchors:
+        return anchors[0]
+    family_key = str(song.get("artist_family_key") or "").strip().casefold()
+    if family_key:
+        return family_key
+    return str(song.get("artist") or "").strip().casefold()
+
+
+def _first_casefolded(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        value = str(item).strip().casefold()
+        if value:
+            return value
+    return ""
+
+
+def _apply_external_adjacency_diversity(
+    ranked: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    pool = [dict(song) for song in ranked]
+    ordered: list[dict[str, Any]] = []
+    while pool:
+        previous_artist = str(ordered[-1].get("artist") or "").casefold() if ordered else ""
+        previous_cluster = _external_cluster_key(ordered[-1]) if ordered else ""
+        pick_index = 0
+        for index, candidate in enumerate(pool):
+            candidate_artist = str(candidate.get("artist") or "").casefold()
+            candidate_cluster = _external_cluster_key(candidate)
+            if candidate_artist != previous_artist and candidate_cluster != previous_cluster:
+                pick_index = index
+                break
+        ordered.append(pool.pop(pick_index))
+    return ordered
+
+
+def _external_version_label(track: dict[str, Any]) -> str:
+    title = str(track.get("title") or "").casefold()
+    album = str(track.get("album") or "").casefold()
+    version_markers = [
+        title.split(" - ", 1)[1] if " - " in title else "",
+        title.split("(", 1)[1] if "(" in title else "",
+        album,
+    ]
+    labels = " ".join(marker for marker in version_markers if marker)
+    if any(
+        marker in labels
+        for marker in ("live", "session", "acoustic", "mtv unplugged")
+    ):
+        return "live_or_session"
+    if "remaster" in labels or "remastered" in labels:
+        return "remastered"
+    if "deluxe" in labels or "bonus" in labels:
+        return "deluxe"
+    return "album_cut"
+
+
+def _external_version_penalty(track: dict[str, Any]) -> float:
+    version_label = _external_version_label(track)
+    if version_label == "live_or_session":
+        return 0.16
+    if version_label == "remastered":
+        return 0.06
+    if version_label == "deluxe":
+        return 0.04
+    return 0.0
 
 
 def _artist_family_key(artist: str) -> str:

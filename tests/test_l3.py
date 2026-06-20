@@ -220,6 +220,19 @@ class RetrievalServiceTests(unittest.TestCase):
         self.assertNotIn("same-external-id", result_ids)
         self.assertNotIn("duplicate-version", result_ids)
 
+    def test_external_seed_ids_are_treated_as_missing_not_invalid(self) -> None:
+        self.profile_store.save(
+            UserProfile(
+                user_id="user-1",
+                collection_song_ids=["seed-1", "spotify:track:abc123"],
+            )
+        )
+
+        result = self.service.retrieve("user-1", top_k=5)
+
+        self.assertEqual(result.seed_song_ids, ["seed-1"])
+        self.assertEqual(result.missing_seed_song_ids, ["spotify:track:abc123"])
+
     def test_applies_artist_limit_and_functional_api(self) -> None:
         for song_id, score in (("blur-1", 1.0), ("blur-2", 0.9)):
             self.song_store.save(

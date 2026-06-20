@@ -87,7 +87,7 @@ class CandidateRetrievalService:
         seeds: list[SongProfile] = []
         missing: list[str] = []
         for song_id in song_ids:
-            if self.song_store.exists(song_id):
+            if _song_exists(self.song_store, song_id):
                 seeds.append(self.song_store.load(song_id))
             else:
                 missing.append(song_id)
@@ -217,3 +217,10 @@ class CandidateRetrievalService:
             missing_seed_song_ids=missing,
             candidates=selected,
         )
+
+
+def _song_exists(song_store: JsonSongStore, song_id: str) -> bool:
+    try:
+        return song_store.exists(song_id)
+    except ValueError:
+        return False

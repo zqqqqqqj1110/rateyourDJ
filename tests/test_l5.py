@@ -165,6 +165,34 @@ class FeedbackServiceTests(unittest.TestCase):
             ["spotify:track:4uLU6hMCjMI75M1A2tKUQC"],
         )
 
+    def test_feedback_signal_model_ignores_external_ids_without_local_profiles(
+        self,
+    ) -> None:
+        profile = self.profile_store.load("user-1")
+        profile.feedback_memory = [
+            {
+                "feedback_type": "favorite",
+                "song_id": "spotify:track:abc123",
+                "timestamp": "2026-06-11T00:00:00+00:00",
+                "reward_score": 0.8,
+                "recommendation_context": {},
+            },
+            {
+                "feedback_type": "like",
+                "song_id": "rock-song",
+                "timestamp": "2026-06-11T00:00:01+00:00",
+                "reward_score": 0.6,
+                "recommendation_context": {},
+            },
+        ]
+        self.profile_store.save(profile)
+
+        model = FeedbackSignalModel(profile, self.song_store)
+
+        self.assertEqual(model.direct_rewards["spotify:track:abc123"], 0.8)
+        self.assertEqual(len(model.feedback_songs), 1)
+        self.assertEqual(model.feedback_songs[0][0].song_id, "rock-song")
+
     def test_direct_feedback_overrides_transferred_feedback(self) -> None:
         self.service.record("user-1", "rock-song", "like")
         profile = self.profile_store.load("user-1")

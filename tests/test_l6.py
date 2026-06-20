@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from rateyourdj.agent_tools import ToolObservation
@@ -30,6 +31,12 @@ from rateyourdj.l6 import (
     parse_agent_request,
     recommendation_loop_plan,
 )
+from rateyourdj.l6.model_runner import (
+    _filter_external_candidates,
+    _apply_external_adjacency_diversity,
+    _rank_provider_tracks,
+)
+from rateyourdj.l6.service import _response_message
 from rateyourdj.l6.session_ranking import (
     SESSION_MEMORY_RANKING_FIELDS,
     build_session_ranking_context,
@@ -527,6 +534,91 @@ class RecommendationAgentTests(unittest.TestCase):
             response.tool_calls[1]["decision_source"],
             "program_provider_first",
         )
+
+    def test_model_can_discover_and_ground_tracks_from_taste(self) -> None:
+        from rateyourdj.domain import GeneratedCandidate
+        from rateyourdj.providers import ProviderError, TrackQuery
+
+        class StubGenerator:
+            @property
+            def name(self):
+                return "stub"
+
+            def generate(self, *, intent, user_taste, count, exclude_artists):
+                return [
+                    GeneratedCandidate("Ghost Track", "Nobody", "n/a"),
+                    GeneratedCandidate("Live Forever", "Oasis", "britpop anthem"),
+                ]
+
+        class GroundingMetadata:
+            @property
+            def provider_name(self):
+                return "fake"
+
+            def get_track_metadata(self, query: TrackQuery):
+                if query.artist.casefold() == "oasis":
+                    return ProviderTrack(
+                        track_id="spotify:track:4uLU6hMCjMI75M1A2tKUQC",
+                        provider="spotify",
+                        title=query.title,
+                        artist=query.artist,
+                        album="Definitely Maybe",
+                        tags={"britpop": 1.0, "rock": 1.0},
+                        external_urls={
+                            "spotify": (
+                                "https://open.spotify.com/track/"
+                                "4uLU6hMCjMI75M1A2tKUQC"
+                            )
+                        },
+                    )
+                raise ProviderError("not found")
+
+        provider = MockLLMProvider(
+            [
+                AgentDecision(
+                    kind="tool",
+                    tool_name="discover_tracks",
+                    arguments={
+                        "intent": "britpop anthems",
+                        "limit": 1,
+                    },
+                    summary="generate candidates from taste then ground them",
+                ),
+            ]
+        )
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                metadata_provider=GroundingMetadata()
+            ),
+            track_generator=StubGenerator(),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend("user-1", "推荐一首 britpop")
+
+        self.assertEqual(response.stop_reason, "goal_satisfied")
+        self.assertEqual(len(response.ranked_songs), 1)
+        self.assertEqual(response.ranked_songs[0]["title"], "Live Forever")
+        self.assertEqual(response.ranked_songs[0]["artist"], "Oasis")
+        discover_calls = [
+            call
+            for call in response.tool_calls
+            if call["tool"] == "discover_tracks"
+        ]
+        self.assertTrue(discover_calls)
+        discover_data = discover_calls[0]["observation"]["data"]
+        self.assertEqual(discover_data["generated"], 2)
+        self.assertEqual(discover_data["grounded"], 1)
+        self.assertEqual(discover_data["dropped"], 1)
 
     def test_external_provider_search_preserves_year_and_indie_intent(self) -> None:
         class SearchProvider:
@@ -1038,6 +1130,161 @@ class RecommendationAgentTests(unittest.TestCase):
             ["spotify:track:relevant"],
         )
 
+    def test_similarity_queries_require_reference_or_expanded_reference_match(
+        self,
+    ) -> None:
+        tracks = [
+            {
+                "track_id": "spotify:track:british-india",
+                "provider": "spotify",
+                "title": "Suddenly",
+                "artist": "British India",
+                "album": "Nothing Touches Me",
+                "release_year": 2010,
+                "tags": {"british": 1.0, "rock": 1.0, "melodic": 1.0},
+                "search_queries": ["oasis british rock melodic"],
+                "search_tiers": ["anchor"],
+                "search_anchor_artists": ["oasis"],
+                "search_expanded_artists": [],
+            }
+        ]
+
+        ranked = _rank_provider_tracks(
+            tracks,
+            request=parse_agent_request("来点更像 Oasis 的英伦摇滚，旋律一点"),
+            user_memory={
+                "genre_preferences": {"british": 1.0, "rock": 1.0},
+                "tag_preferences": {"melodic": 0.8},
+            },
+            similar_artist_candidates=[],
+        )
+
+        filtered = _filter_external_candidates(
+            ranked,
+            parse_agent_request("来点更像 Oasis 的英伦摇滚，旋律一点"),
+            session=AgentSession(
+                schema_version=1,
+                session_id="session-1",
+                user_id="user-1",
+            ),
+        )
+        self.assertEqual(filtered, [])
+
+    def test_provider_version_penalty_prefers_album_cut_over_live_cut(self) -> None:
+        request = parse_agent_request("来点更像 Oasis 的英伦摇滚")
+        ranked = _rank_provider_tracks(
+            [
+                {
+                    "track_id": "spotify:track:live",
+                    "provider": "spotify",
+                    "title": "Live Forever - Radio 2 Session",
+                    "artist": "Noel Gallagher's High Flying Birds",
+                    "album": "Council Skies (Deluxe)",
+                    "release_year": 2023,
+                    "tags": {"britpop": 1.0},
+                    "search_queries": ["oasis council skies"],
+                    "search_tiers": ["expanded"],
+                    "search_anchor_artists": ["oasis"],
+                    "search_expanded_artists": ["noel gallagher's high flying birds"],
+                },
+                {
+                    "track_id": "spotify:track:album",
+                    "provider": "spotify",
+                    "title": "Live Forever",
+                    "artist": "Oasis",
+                    "album": "Definitely Maybe",
+                    "release_year": 1994,
+                    "tags": {"britpop": 1.0},
+                    "search_queries": ["oasis definitely maybe"],
+                    "search_tiers": ["anchor"],
+                    "search_anchor_artists": ["oasis"],
+                    "search_expanded_artists": [],
+                },
+            ],
+            request=request,
+            user_memory={},
+            similar_artist_candidates=[
+                {
+                    "name": "Noel Gallagher's High Flying Birds",
+                    "source_artist": "oasis",
+                    "score": 0.9,
+                }
+            ],
+        )
+
+        by_id = {song["song_id"]: song for song in ranked}
+        self.assertLess(
+            by_id["spotify:track:live"]["base_score"],
+            by_id["spotify:track:album"]["base_score"],
+        )
+        self.assertEqual(
+            by_id["spotify:track:live"]["version_label"],
+            "live_or_session",
+        )
+
+    def test_external_adjacency_diversity_separates_same_cluster_when_possible(
+        self,
+    ) -> None:
+        ordered = _apply_external_adjacency_diversity(
+            [
+                {
+                    "song_id": "1",
+                    "artist": "Oasis",
+                    "title": "A",
+                    "cluster_key": "oasis",
+                    "artist_family_key": "",
+                    "final_score": 0.6,
+                },
+                {
+                    "song_id": "2",
+                    "artist": "Noel Gallagher's High Flying Birds",
+                    "title": "B",
+                    "cluster_key": "oasis",
+                    "artist_family_key": "gallagher",
+                    "final_score": 0.59,
+                },
+                {
+                    "song_id": "3",
+                    "artist": "Pulp",
+                    "title": "C",
+                    "cluster_key": "blur",
+                    "artist_family_key": "",
+                    "final_score": 0.58,
+                },
+            ]
+        )
+
+        self.assertEqual([song["song_id"] for song in ordered], ["1", "3", "2"])
+
+    def test_response_message_summarizes_exclusions_instead_of_echoing_raw_terms(
+        self,
+    ) -> None:
+        request = parse_agent_request(
+            "还是不够像 Oasis，我想要更旋律一点的英伦摇滚，不要重复的，不要太朋克"
+        )
+        request = replace(
+            request,
+            exclude_terms=[
+                "重复的",
+                "punk",
+                "noel gallagher's high flying birds这种",
+            ],
+        )
+
+        message = _response_message(
+            request,
+            [{"song_id": "a", "retrieval_sources": ["spotify_search"]}],
+            stop_reason="goal_satisfied",
+            attempts=1,
+            used_external_search=True,
+        )
+
+        self.assertIn("已避开太朋克的结果", message)
+        self.assertIn("已避开重复结果", message)
+        self.assertIn("已避开 Gallagher 支线结果", message)
+        self.assertNotIn("重复的", message)
+        self.assertNotIn("noel gallagher's high flying birds这种", message)
+
     def test_external_provider_mode_does_not_fall_back_to_local_ranking(self) -> None:
         class EmptySearchProvider:
             @property
@@ -1489,7 +1736,7 @@ class RecommendationAgentTests(unittest.TestCase):
 
         self.assertEqual(
             [song["song_id"] for song in response.ranked_songs[:2]],
-            ["spotify:track:noel-1", "spotify:track:verve"],
+            ["spotify:track:noel-2", "spotify:track:verve"],
         )
 
     def test_reference_match_requires_exact_artist_not_substring(self) -> None:
@@ -2053,6 +2300,64 @@ class RecommendationAgentTests(unittest.TestCase):
         self.assertEqual(session.last_run_id, response.trajectory_id)
         self.assertTrue(session.created_at)
 
+    def test_model_invented_reference_and_refinement_are_dropped_not_aborted(
+        self,
+    ) -> None:
+        # The model adds reference_artists / refinement_notes the plain query did
+        # not imply. These are not safety violations, so apply_request_patch
+        # should drop those fields and keep going (rather than raising and
+        # collapsing the whole model run to rules).
+        from rateyourdj.l6.guards import apply_request_patch
+        from rateyourdj.l6.parser import parse_agent_request
+
+        request = parse_agent_request("推荐 5 首英伦摇滚", default_top_k=5)
+        patched = apply_request_patch(
+            request,
+            {
+                "reference_artists": ["Oasis", "Blur"],
+                "refinement_notes": ["classic britpop from the 90s"],
+                "preference_terms": ["britpop"],
+            },
+        )
+
+        # Invented similarity/refinement fields are dropped, and no error is
+        # raised (the run can keep going in model mode).
+        self.assertEqual(patched.reference_artists, [])
+        self.assertEqual(patched.refinement_notes, [])
+
+    def test_session_persists_user_request_not_model_search_patch(self) -> None:
+        provider = MockLLMProvider(
+            [
+                AgentDecision(
+                    kind="update",
+                    summary="incorrectly tighten retrieval terms",
+                    request_patch={
+                        "preference_terms": ["90s", "alternative rock"],
+                        "exclude_terms": ["non-british"],
+                    },
+                ),
+                AgentDecision(
+                    kind="tool",
+                    tool_name="L4.rank_candidates",
+                    arguments={},
+                    summary="rank candidates",
+                ),
+            ]
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend("user-1", "推荐一首摇滚")
+        session = self.service.session_store.load_or_create("user-1", response.session_id)
+
+        self.assertEqual(session.preference_terms, ["rock"])
+        self.assertEqual(session.exclude_terms, [])
+
     def test_insufficient_candidates_retries_and_records_diagnostics(self) -> None:
         response = self.service.recommend("user-1", "推荐五首摇滚")
 
@@ -2283,22 +2588,32 @@ class L6CliTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[1]
         environment = dict(os.environ)
         environment.pop("DEEPSEEK_API_KEY", None)
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "rateyourdj.l6.cli",
-                "--llm-provider",
-                "deepseek",
-                "recommend",
-                "demo-user",
-                "推荐一首歌",
-            ],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            env=environment,
+        # Make the package importable without using the project root as cwd,
+        # so a developer's local .env file is never auto-loaded for this test.
+        existing_path = environment.get("PYTHONPATH", "")
+        src_path = str(project_root / "src")
+        environment["PYTHONPATH"] = (
+            f"{src_path}{os.pathsep}{existing_path}"
+            if existing_path
+            else src_path
         )
+        with tempfile.TemporaryDirectory() as isolated_cwd:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "rateyourdj.l6.cli",
+                    "--llm-provider",
+                    "deepseek",
+                    "recommend",
+                    "demo-user",
+                    "推荐一首歌",
+                ],
+                cwd=isolated_cwd,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("DEEPSEEK_API_KEY is not configured", result.stderr)

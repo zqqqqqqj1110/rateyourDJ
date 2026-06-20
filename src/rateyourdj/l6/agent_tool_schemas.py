@@ -141,6 +141,32 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "discover_tracks",
+        "description": (
+            "Generate candidate songs from the user's taste profile and the "
+            "current request using music knowledge, then ground each proposal "
+            "against an external provider so non-existent songs are dropped. "
+            "Prefer this for open-ended discovery from taste rather than "
+            "keyword search."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "intent": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                "exclude_artists": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 25,
+                },
+            },
+            "required": ["user_id", "intent"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "search_tracks",
         "description": (
             "Search music providers for recommendation candidates. This is the "

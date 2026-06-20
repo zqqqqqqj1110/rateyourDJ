@@ -94,6 +94,7 @@ class RecommendationAgentService:
         parsed = parse_agent_request(query, default_top_k=default_top_k)
         session = self.session_store.load_or_create(user_id, session_id)
         request = request_with_session_context(parsed, session)
+        session_request = request
         plan = _initialized_loop_plan()
         steps: list[dict[str, Any]] = []
         agent_decisions: list[dict[str, Any]] = []
@@ -222,17 +223,17 @@ class RecommendationAgentService:
             message=message,
         )
         session.turn_count += 1
-        session.current_intent = request.intent
-        session.last_user_query = request.query
+        session.current_intent = session_request.intent
+        session.last_user_query = session_request.query
         session.last_trajectory_id = trajectory_id
-        session.last_top_k = request.top_k
-        session.last_max_per_artist = request.max_per_artist
-        session.last_min_retrieval_score = request.min_retrieval_score
-        session.active_constraints["exclude_seen"] = request.exclude_seen
-        if request.preference_terms:
-            session.preference_terms = list(request.preference_terms)
+        session.last_top_k = session_request.top_k
+        session.last_max_per_artist = session_request.max_per_artist
+        session.last_min_retrieval_score = session_request.min_retrieval_score
+        session.active_constraints["exclude_seen"] = session_request.exclude_seen
+        if session_request.preference_terms:
+            session.preference_terms = list(session_request.preference_terms)
         session.exclude_terms = unique(
-            [*session.exclude_terms, *request.exclude_terms]
+            [*session.exclude_terms, *session_request.exclude_terms]
         )
         session.seed_track_ids = unique(
             [
@@ -396,8 +397,9 @@ def _response_message(
         details.append("已避开本次会话中展示过的歌曲")
     if request.preference_terms:
         details.append("偏好：" + "、".join(request.preference_terms))
-    if request.exclude_terms:
-        details.append("已排除：" + "、".join(request.exclude_terms))
+    exclude_summary = _exclude_terms_summary(request)
+    if exclude_summary:
+        details.extend(exclude_summary)
     if request.max_per_artist == 1:
         details.append("已增强歌手多样性")
     if attempts > 1:
@@ -410,6 +412,29 @@ def _response_message(
     if any(source.endswith("_search") for source in source_labels):
         return "；".join(details) + "。每首歌都基于外部搜索结果和用户画像评分。"
     return "；".join(details) + "。每首歌都保留了 L4 分数拆解和推荐原因。"
+
+
+def _exclude_terms_summary(request: AgentRequest) -> list[str]:
+    terms = [str(term).strip() for term in request.exclude_terms if str(term).strip()]
+    if not terms:
+        return []
+    lowered = [term.casefold() for term in terms]
+    details: list[str] = []
+    explicit_artists = [
+        term
+        for term in terms
+        if term.casefold() not in {"重复的", "重复", "punk", "太朋克", "朋克"}
+        and "这种" not in term
+    ]
+    if any(term in {"punk", "太朋克", "朋克"} for term in lowered):
+        details.append("已避开太朋克的结果")
+    if any("重复" in term for term in lowered):
+        details.append("已避开重复结果")
+    if any("gallagher" in term or "noel" in term or "liam" in term for term in lowered):
+        details.append("已避开 Gallagher 支线结果")
+    if explicit_artists:
+        details.append("已避开用户明确排除的艺人")
+    return details
 
 
 def _has_external_search_source(songs: list[dict[str, Any]]) -> bool:

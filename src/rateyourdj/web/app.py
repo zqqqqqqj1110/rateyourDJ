@@ -26,6 +26,19 @@ from rateyourdj.providers import (
     ExternalMusicProvider,
     configured_music_provider_from_env,
 )
+from rateyourdj.domain import (
+    DeepSeekTrackGenerator,
+    ExplanationGenerator,
+    TasteSeedTrackGenerator,
+)
+
+
+def _default_track_generator() -> Any:
+    """Use DeepSeek generation when a key is set, else a local taste seed."""
+    generator = DeepSeekTrackGenerator.from_env()
+    if generator is not None:
+        return generator
+    return TasteSeedTrackGenerator()
 
 
 def create_app(
@@ -36,6 +49,8 @@ def create_app(
     session_dir: str | Path = "data/sessions",
     llm_provider: LLMProvider | None = None,
     music_provider: ExternalMusicProvider | None = None,
+    track_generator: Any | None = None,
+    auto_configure_track_generator: bool = True,
     auto_configure_music_provider: bool = True,
     agent_mode: str = "auto",
 ) -> Flask:
@@ -57,6 +72,13 @@ def create_app(
         if auto_configure_music_provider
         else None
     )
+    resolved_track_generator = (
+        track_generator
+        if track_generator is not None
+        else _default_track_generator()
+        if auto_configure_track_generator
+        else None
+    )
     agent_service = RecommendationAgentService(
         ranking_service,
         song_store,
@@ -67,6 +89,7 @@ def create_app(
                 profile_store,
                 song_store,
                 music_provider=resolved_music_provider,
+                track_generator=resolved_track_generator,
             )
             if resolved_music_provider is not None
             else None
@@ -196,8 +219,58 @@ def create_app(
                     "include_trace",
                     default=False,
                 ),
+                user_memory=_safe_user_memory(profile_store, result.user_id),
             )
         ), 201
+
+    @app.post("/api/v1/agent/feedback")
+    def v1_agent_feedback() -> Any:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        context = _optional_mapping(payload, "context")
+        recommendation_context = dict(context)
+        run_id = _optional_string(payload, "run_id")
+        if run_id is not None:
+            recommendation_context.setdefault("trajectory_id", run_id)
+        record = feedback_service.record(
+            _required_string(payload, "user_id"),
+            _required_string(payload, "track_id"),
+            _required_string(payload, "event"),
+            reward_score=payload.get("reward_score"),
+            recommendation_context=recommendation_context or None,
+        )
+        return jsonify(
+            {
+                "run_id": run_id,
+                "track_id": record.song_id,
+                "event": record.feedback_type,
+                "reward_score": record.reward_score,
+            }
+        ), 201
+
+    @app.get("/api/v1/agent/session/<session_id>")
+    def v1_agent_session(session_id: str) -> Any:
+        user_id = request.args.get("user_id")
+        if not user_id or not user_id.strip():
+            raise ValueError("user_id query parameter is required")
+        session = session_store.load_or_create(user_id.strip(), session_id)
+        return jsonify(
+            {
+                "session_id": session.session_id,
+                "user_id": session.user_id,
+                "turn_count": session.turn_count,
+                "current_intent": session.current_intent,
+                "last_user_query": session.last_user_query,
+                "preference_terms": list(session.preference_terms),
+                "exclude_terms": list(session.exclude_terms),
+                "seen_track_ids": list(session.seen_track_ids),
+                "last_recommendation_ids": list(
+                    session.last_recommendation_ids
+                ),
+                "last_run_id": session.last_run_id,
+            }
+        )
 
     @app.get("/api/collection/<user_id>")
     def collection(user_id: str) -> Any:
@@ -296,6 +369,22 @@ def _top_preferences(
     ]
 
 
+def _safe_user_memory(
+    profile_store: JsonProfileStore,
+    user_id: str,
+) -> dict[str, Any]:
+    """Load preference maps for explanation; never raise on a missing profile."""
+    try:
+        profile = profile_store.load(user_id)
+    except (ProfileNotFoundError, ValueError):
+        return {}
+    return {
+        "artist_preferences": dict(profile.artist_preferences),
+        "genre_preferences": dict(profile.genre_preferences),
+        "tag_preferences": dict(profile.tag_preferences),
+    }
+
+
 def _attach_spotify_playback(
     payload: dict[str, Any],
     song_store: JsonSongStore,
@@ -338,14 +427,18 @@ def _agent_recommend_response_v1(
     song_store: JsonSongStore,
     *,
     include_trace: bool,
+    user_memory: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     enriched = _attach_spotify_playback(payload, song_store)
+    explanation_generator = ExplanationGenerator()
     recommendations = [
         _agent_recommendation_v1(
             song,
             song_store,
             parsed_request=enriched.get("parsed_request", {}),
             seed_song_ids=enriched.get("seed_song_ids", []),
+            explanation_generator=explanation_generator,
+            user_memory=user_memory or {},
         )
         for song in enriched.get("ranked_songs", [])
     ]
@@ -386,7 +479,17 @@ def _agent_recommendation_v1(
     *,
     parsed_request: Any,
     seed_song_ids: Any,
+    explanation_generator: "ExplanationGenerator | None" = None,
+    user_memory: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if explanation_generator is not None:
+        explanation = explanation_generator.explain_track(
+            ranked_song,
+            user_memory=user_memory or {},
+        )
+        reasons = [reason.to_dict() for reason in explanation.reasons]
+    else:
+        reasons = _recommendation_reasons_v1(ranked_song, parsed_request)
     return {
         "rank": ranked_song.get("rank"),
         "track": _track_payload_v1(ranked_song, song_store),
@@ -405,7 +508,7 @@ def _agent_recommendation_v1(
                 list(seed_song_ids) if isinstance(seed_song_ids, list) else []
             ),
         },
-        "reasons": _recommendation_reasons_v1(ranked_song, parsed_request),
+        "reasons": reasons,
         "actions": {
             "play": True,
             "like": True,
@@ -663,6 +766,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    from rateyourdj.config import load_dotenv
+
+    load_dotenv()
     parser = build_parser()
     args = parser.parse_args()
     try:

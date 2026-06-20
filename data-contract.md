@@ -411,7 +411,7 @@ Schema:
   },
   "agent": {
     "mode": "auto",
-    "provider": "deepseek:deepseek-v4-flash",
+    "provider": "deepseek:deepseek-chat",
     "fallback_reason": null
   },
   "created_at": "2026-06-16T00:00:00Z"
