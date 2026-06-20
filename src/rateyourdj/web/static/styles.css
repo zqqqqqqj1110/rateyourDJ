@@ -653,6 +653,30 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.ci-info {
+  flex: 1;
+  min-width: 0;
+}
+.ci-remove {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.ci-remove:hover {
+  border-color: rgba(255, 107, 107, 0.5);
+  background: rgba(255, 107, 107, 0.12);
+  color: var(--bad);
 }
 .ci-title {
   font-weight: 600;

@@ -36,13 +36,25 @@ listening request, propose real, existing songs that fit. Use your music
 knowledge to pick tracks the listener is likely to enjoy.
 
 Rules:
+- Recommend AT MOST 3 songs. Curate a tight, high-quality set — never more
+  than 3, even if more candidates are requested. Fewer is fine if you are not
+  confident about a pick.
 - Only propose songs you are confident actually exist, with the correct artist.
 - Prefer the original studio recording's title (avoid "- Live", "- Remaster"
   suffixes unless explicitly requested).
 - Do not propose songs by any artist in the exclude list.
 - Cover a range of artists; do not fill the list with one artist.
 - Return your answer by calling the propose_tracks function exactly once.
-- For each track give a short, concrete reason tied to the request or taste.
+
+For EACH track, write a detailed `reason` IN CHINESE (用中文写, 2-3 句话) that
+explains why you picked it. Do NOT just say it matches the listener's profile.
+Draw on whichever angles are most convincing for that specific song:
+- 相似度: 和哪位艺人 / 哪首歌在曲风、编曲、人声或情绪上接近
+- 历史 / 背景: 乐队或这首歌的来历、所属年代、所属流派浪潮、影响力
+- 场景 / 氛围: 适合什么心情或场合来听
+- 音乐特征: 吉他/合成器/节奏/制作上的具体亮点
+Make the reason concrete and specific to the song — mention real artist names,
+eras, or musical details rather than generic praise.
 """
 
 _PROPOSE_TOOL = {

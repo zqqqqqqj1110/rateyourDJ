@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from rateyourdj.l1 import ProfileNotFoundError
+from rateyourdj.l1 import ProfileNotFoundError, UserProfileService
 from rateyourdj.l2 import JsonSongStore
 from rateyourdj.l4 import RecommendationRankingService
 
@@ -54,6 +54,9 @@ class RecommendationAgentService:
         self.ranking_service = ranking_service
         self.song_store = song_store
         self.trajectory_store = trajectory_store
+        self.profile_service = UserProfileService(
+            ranking_service.profile_store
+        )
         self.session_store = session_store or JsonSessionStore(
             trajectory_store.root.parent / "sessions"
         )
@@ -244,6 +247,8 @@ class RecommendationAgentService:
         session.last_recommendation_ids = [
             str(song["song_id"]) for song in recommendations
         ]
+        session.append_message("user", session_request.query)
+        session.append_message("dj", message)
         session.seen_song_ids = unique(
             [
                 *session.seen_song_ids,
@@ -262,6 +267,16 @@ class RecommendationAgentService:
             ]
         )
         self.session_store.save(session)
+        # 轻量长期学习：把本轮对话表达的偏好沉淀到画像的独立字段
+        # (conversation_affinity)，不影响收藏重算。best-effort，失败不阻断返回。
+        if session_request.preference_terms:
+            try:
+                self.profile_service.learn_from_conversation(
+                    user_id,
+                    list(session_request.preference_terms),
+                )
+            except Exception:  # noqa: BLE001 - learning is best-effort
+                pass
         _mark_phase(
             plan,
             "trajectory_write",
@@ -279,6 +294,7 @@ class RecommendationAgentService:
                 "seen_track_ids",
                 "seen_track_signatures",
                 "last_run_id",
+                "messages",
             ],
         )
 
@@ -501,6 +517,7 @@ def _session_memory_snapshot(session: AgentSession) -> dict[str, Any]:
         "temporary_feedback": [
             dict(item) for item in session.temporary_feedback
         ],
+        "messages": [dict(item) for item in session.messages],
     }
 
 

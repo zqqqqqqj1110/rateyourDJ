@@ -70,6 +70,9 @@ class UserProfileService:
                     if preserve_feedback
                     else normalized["feedback_memory"]
                 ),
+                # conversation_affinity is learned from chat, not from the
+                # collection, so a collection rebuild must preserve it.
+                conversation_affinity=dict(existing.conversation_affinity),
                 version=existing.version + 1,
                 updated_at=datetime.now(timezone.utc).isoformat(),
             )
@@ -83,3 +86,65 @@ class UserProfileService:
             *PREFERENCE_FIELDS,
             "feedback_memory",
         )
+
+    def learn_from_conversation(
+        self,
+        user_id: str,
+        terms: list[str],
+        *,
+        increment: float = 0.34,
+        decay: float = 0.9,
+        max_terms: int = 64,
+    ) -> UserProfile:
+        """Nudge long-term conversation affinity from chat preference terms.
+
+        This is a *light* learning signal: terms the user mentions in chat
+        gain weight even without an explicit like/save, while all other terms
+        decay slightly so stale interests fade. Weights use a decayed EMA and
+        are clamped to [0, 1]. Stored separately from collection-derived
+        preferences so a collection rebuild never overwrites it.
+        """
+        cleaned = []
+        seen: set[str] = set()
+        for term in terms:
+            label = str(term or "").strip()
+            key = label.casefold()
+            if label and key not in seen:
+                seen.add(key)
+                cleaned.append(label)
+        if not cleaned:
+            return self.store.load_or_create(user_id)
+
+        boosted = {term.casefold() for term in cleaned}
+
+        def update(profile: UserProfile) -> UserProfile:
+            affinity = dict(profile.conversation_affinity)
+            # Decay existing interests so the profile tracks recent taste.
+            for label in list(affinity):
+                affinity[label] = round(affinity[label] * decay, 6)
+            # Boost mentioned terms (decayed EMA toward 1.0).
+            for label in cleaned:
+                current = affinity.get(label, 0.0)
+                affinity[label] = round(
+                    min(1.0, current * decay + increment), 6
+                )
+            # Drop negligible weights, then cap the dictionary size.
+            affinity = {
+                label: weight
+                for label, weight in affinity.items()
+                if weight >= 0.05 or label.casefold() in boosted
+            }
+            if len(affinity) > max_terms:
+                affinity = dict(
+                    sorted(
+                        affinity.items(),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )[:max_terms]
+                )
+            profile.conversation_affinity = affinity
+            profile.version += 1
+            profile.updated_at = datetime.now(timezone.utc).isoformat()
+            return profile
+
+        return self.store.update(user_id, update)

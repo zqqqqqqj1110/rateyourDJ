@@ -16,6 +16,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+# Cap stored conversation turns so a long session file stays bounded.
+MAX_SESSION_MESSAGES = 100
+
+
 @dataclass(slots=True)
 class AgentSession:
     schema_version: int
@@ -33,8 +37,30 @@ class AgentSession:
     last_run_id: str | None = None
     last_recommendation_ids: list[str] = field(default_factory=list)
     temporary_feedback: list[dict[str, Any]] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
+
+    def append_message(
+        self,
+        role: str,
+        text: str,
+        *,
+        max_messages: int = MAX_SESSION_MESSAGES,
+    ) -> None:
+        """Append one conversation turn (role: 'user' or 'dj') with a timestamp.
+
+        Keeps only the most recent ``max_messages`` entries so the session file
+        does not grow without bound over a long conversation.
+        """
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            return
+        self.messages.append(
+            {"role": str(role), "text": cleaned, "ts": _now()}
+        )
+        if len(self.messages) > max_messages:
+            del self.messages[: len(self.messages) - max_messages]
 
     @property
     def seen_song_ids(self) -> list[str]:
@@ -225,6 +251,7 @@ def _migrate_session_payload(value: dict[str, Any]) -> dict[str, Any]:
         "temporary_feedback": _feedback_list(
             value.get("temporary_feedback", [])
         ),
+        "messages": _message_list(value.get("messages", [])),
         "created_at": _optional_string(value.get("created_at")) or _now(),
         "updated_at": _optional_string(value.get("updated_at")) or _now(),
     }
@@ -253,6 +280,26 @@ def _feedback_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [dict(item) for item in value if isinstance(item, dict)]
+
+
+def _message_list(value: Any) -> list[dict[str, Any]]:
+    """Normalize stored conversation turns; tolerate legacy/missing data."""
+    if not isinstance(value, list):
+        return []
+    messages: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if not role or not text:
+            continue
+        entry: dict[str, Any] = {"role": role, "text": text}
+        ts = _optional_string(item.get("ts"))
+        if ts:
+            entry["ts"] = ts
+        messages.append(entry)
+    return messages
 
 
 def _optional_string(value: Any) -> str | None:

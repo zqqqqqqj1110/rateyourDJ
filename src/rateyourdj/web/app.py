@@ -269,6 +269,7 @@ def create_app(
                     session.last_recommendation_ids
                 ),
                 "last_run_id": session.last_run_id,
+                "messages": [dict(item) for item in session.messages],
             }
         )
 
@@ -340,6 +341,35 @@ def create_app(
             recommendation_context=payload.get("recommendation_context"),
         )
         return jsonify(record.to_dict()), 201
+
+    @app.delete("/api/collection/<user_id>/<path:track_id>")
+    def remove_collection_track(user_id: str, track_id: str) -> Any:
+        track_id = track_id.strip()
+        if not track_id:
+            raise ValueError("track_id must be a non-empty string")
+        removed = {"value": False}
+
+        def _drop(profile: Any) -> Any:
+            if track_id in profile.collection_song_ids:
+                profile.collection_song_ids = [
+                    song_id
+                    for song_id in profile.collection_song_ids
+                    if song_id != track_id
+                ]
+                removed["value"] = True
+            return profile
+
+        if not profile_store.exists(user_id):
+            raise ProfileNotFoundError(user_id)
+        updated = profile_store.update(user_id, _drop)
+        return jsonify(
+            {
+                "user_id": user_id,
+                "track_id": track_id,
+                "removed": removed["value"],
+                "collection_count": len(updated.collection_song_ids),
+            }
+        )
 
     @app.errorhandler(ValueError)
     @app.errorhandler(ProfileNotFoundError)

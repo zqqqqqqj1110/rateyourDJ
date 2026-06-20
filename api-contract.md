@@ -297,6 +297,24 @@ Collection is explicit user-owned memory. It is not the full recommendation cand
 }
 ```
 
+### Delete (implemented)
+
+```text
+DELETE /api/collection/:user_id/:track_id
+```
+
+Removes one track from the user's collection. Returns 404 if the user profile
+does not exist; returns `removed: false` if the track was not in the collection.
+
+```json
+{
+  "user_id": "demo-user",
+  "track_id": "spotify:track:...",
+  "removed": true,
+  "collection_count": 41
+}
+```
+
 ## 6. Agent Status
 
 ```text

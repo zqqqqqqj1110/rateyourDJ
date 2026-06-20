@@ -178,7 +178,7 @@ class ExplanationGenerator:
                     type="discovery",
                     label="DJ 选曲理由",
                     detail={"reason": discovery_reason},
-                    weight=0.65,
+                    weight=0.9,
                 )
             )
 

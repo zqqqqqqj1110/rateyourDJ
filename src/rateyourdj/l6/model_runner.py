@@ -1350,6 +1350,9 @@ def _rank_provider_tracks(
                     )
                 ),
                 "version_label": version_label,
+                "discovery_reason": str(
+                    track.get("discovery_reason") or ""
+                ).strip(),
             }
         )
     ranked.sort(

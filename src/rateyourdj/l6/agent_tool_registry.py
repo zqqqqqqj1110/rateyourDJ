@@ -776,6 +776,7 @@ def _user_taste_from_profile(
         "artist_preferences": dict(data.get("artist_preferences", {})),
         "genre_preferences": dict(data.get("genre_preferences", {})),
         "tag_preferences": dict(data.get("tag_preferences", {})),
+        "conversation_affinity": dict(data.get("conversation_affinity", {})),
     }
     seed_tracks: list[dict[str, Any]] = []
     for song_id in data.get("collection_song_ids", [])[:25]:

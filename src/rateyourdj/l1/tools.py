@@ -78,6 +78,7 @@ def inspect_user_profile(
             "artist_preferences": dict(profile.artist_preferences),
             "genre_preferences": dict(profile.genre_preferences),
             "tag_preferences": dict(profile.tag_preferences),
+            "conversation_affinity": dict(profile.conversation_affinity),
             "feedback_count": len(profile.feedback_memory),
             "version": profile.version,
             "updated_at": profile.updated_at,

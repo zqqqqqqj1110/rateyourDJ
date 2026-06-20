@@ -17,7 +17,28 @@ const state = {
 
 const $ = (sel) => document.querySelector(sel);
 
+// 跨刷新持久化：记住 user_id 和当前会话，刷新/重开页面不丢上下文
+const STORE_KEYS = { user: "rydj.userId", session: "rydj.sessionId" };
+
+function lsGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (error) {
+    return null;
+  }
+}
+function lsSet(key, value) {
+  try {
+    if (value == null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch (error) {
+    /* localStorage 不可用时静默降级为内存态 */
+  }
+}
+
 const stream = $("#chat-stream");
+// 缓存初始欢迎屏，"新对话"时可还原
+const WELCOME_HTML = stream.innerHTML;
 const composer = $("#composer");
 const composerInput = $("#composer-input");
 const userIdInput = $("#user-id");
@@ -39,9 +60,20 @@ window.onSpotifyIframeApiReady = (IFrameAPI) => {
 init();
 
 function init() {
+  // 恢复上次的用户与会话
+  const savedUser = lsGet(STORE_KEYS.user);
+  if (savedUser) {
+    userIdInput.value = savedUser;
+    state.userId = savedUser;
+  }
+  state.userId = userIdInput.value.trim() || "demo-user";
+  state.sessionId = lsGet(STORE_KEYS.session);
+
   userIdInput.addEventListener("change", () => {
     state.userId = userIdInput.value.trim() || "demo-user";
-    state.sessionId = null;
+    lsSet(STORE_KEYS.user, state.userId);
+    // 换用户即开新会话
+    startNewConversation();
     refreshCollection();
   });
 
@@ -59,10 +91,49 @@ function init() {
   $("#open-collection").addEventListener("click", openDrawer);
   $("#close-collection").addEventListener("click", closeDrawer);
   $("#drawer-backdrop").addEventListener("click", closeDrawer);
+  $("#new-chat").addEventListener("click", startNewConversation);
 
-  state.userId = userIdInput.value.trim() || "demo-user";
+  lsSet(STORE_KEYS.user, state.userId);
   loadStatus();
   refreshCollection();
+  if (state.sessionId) restoreConversation();
+}
+
+// 拉取已保存会话的历史消息，重建对话流
+async function restoreConversation() {
+  try {
+    const session = await getJSON(
+      `/api/v1/agent/session/${encodeURIComponent(state.sessionId)}?user_id=${encodeURIComponent(state.userId)}`
+    );
+    const messages = session.messages || [];
+    if (messages.length === 0) return;
+    dismissWelcome();
+    messages.forEach((m) => {
+      if (m.role === "user") appendUserBubble(m.text);
+      else appendHistoryDJBubble(m.text);
+    });
+  } catch (error) {
+    // 会话已失效或不属于该用户：丢弃，回到全新状态
+    state.sessionId = null;
+    lsSet(STORE_KEYS.session, null);
+  }
+}
+
+function startNewConversation() {
+  state.sessionId = null;
+  state.lastRunId = null;
+  state.trackState = {};
+  state.trackCache = {};
+  lsSet(STORE_KEYS.session, null);
+  // 还原欢迎屏并重新绑定示例问题
+  stream.innerHTML = WELCOME_HTML;
+  const row = $("#suggestion-row");
+  if (row) {
+    row.addEventListener("click", (event) => {
+      const button = event.target.closest(".suggestion");
+      if (button) sendMessage(button.dataset.q);
+    });
+  }
 }
 
 async function loadStatus() {
@@ -99,12 +170,13 @@ async function sendMessage(text) {
         user_id: state.userId,
         message: text,
         session_id: state.sessionId,
-        constraints: { limit: 8 },
+        constraints: { limit: 3 },
         include_trace: true,
       }),
     });
     state.sessionId = result.session_id;
     state.lastRunId = result.run_id;
+    lsSet(STORE_KEYS.session, state.sessionId);
     thinking.remove();
     appendDJReply(result, text);
   } catch (error) {
@@ -138,6 +210,19 @@ function appendErrorBubble(text) {
   const row = el("div", "msg msg-dj");
   const bubble = el("div", "bubble bubble-dj error");
   bubble.textContent = `出错了：${text}`;
+  row.appendChild(bubble);
+  stream.appendChild(row);
+  scrollToBottom();
+}
+
+// 恢复历史会话时使用：只重建 DJ 的话术气泡（歌曲卡片数据未持久化，故不重建）
+function appendHistoryDJBubble(text) {
+  const row = el("div", "msg msg-dj");
+  const bubble = el("div", "bubble bubble-dj");
+  const head = el("div", "dj-head");
+  head.innerHTML = '<span class="dj-avatar">DJ</span>';
+  head.appendChild(el("p", "dj-note", text));
+  bubble.appendChild(head);
   row.appendChild(bubble);
   stream.appendChild(row);
   scrollToBottom();
@@ -197,7 +282,7 @@ function buildTrackCard(rec) {
   card.appendChild(main);
 
   // 推荐理由
-  const reasons = (rec.reasons || []).filter((r) => r && r.text).slice(0, 2);
+  const reasons = (rec.reasons || []).filter((r) => r && r.text).slice(0, 3);
   if (reasons.length) {
     const reasonWrap = el("div", "track-reasons");
     reasons.forEach((r) => reasonWrap.appendChild(el("p", "reason", r.text)));
@@ -377,16 +462,57 @@ function renderCollection(collection) {
   list.replaceChildren();
   songs.forEach((song) => {
     const item = el("div", "collection-item");
-    item.appendChild(el("div", "ci-title", song.title || "未知曲目"));
+
+    const info = el("div", "ci-info");
+    info.appendChild(el("div", "ci-title", song.title || "未知曲目"));
     const sub = [song.artist, song.album].filter(Boolean).join(" · ");
-    item.appendChild(el("div", "ci-sub", sub || "未知艺人"));
+    info.appendChild(el("div", "ci-sub", sub || "未知艺人"));
     if (Array.isArray(song.genres) && song.genres.length) {
       const tags = el("div", "ci-tags");
       song.genres.slice(0, 3).forEach((g) => tags.appendChild(el("span", "ci-tag", g)));
-      item.appendChild(tags);
+      info.appendChild(tags);
     }
+    item.appendChild(info);
+
+    const removeBtn = el("button", "ci-remove", "✕");
+    removeBtn.type = "button";
+    removeBtn.title = "从收藏中移除";
+    removeBtn.setAttribute("aria-label", "从收藏中移除");
+    removeBtn.addEventListener("click", () =>
+      removeFromCollection(song.song_id, item, song.title)
+    );
+    item.appendChild(removeBtn);
+
     list.appendChild(item);
   });
+}
+
+async function removeFromCollection(trackId, itemEl, title) {
+  if (!trackId) return;
+  try {
+    await getJSON(
+      `/api/collection/${encodeURIComponent(state.userId)}/${encodeURIComponent(trackId)}`,
+      { method: "DELETE" }
+    );
+    itemEl.remove();
+    // 同步卡片上的 ♥ 状态，方便重新收藏
+    const ts = state.trackState[trackId];
+    if (ts) ts.fav = false;
+    document
+      .querySelectorAll(`.track-card[data-track-id="${cssEscape(trackId)}"] .fb-button.active`)
+      .forEach((b) => {
+        if (b.textContent === "♥") b.classList.remove("active");
+      });
+    toast(`已移除 ${title || "这首歌"}`);
+    refreshCollection();
+  } catch (error) {
+    toast(`移除失败：${error.message}`);
+  }
+}
+
+function cssEscape(value) {
+  if (window.CSS && CSS.escape) return CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 // ---------- 工具函数 ----------

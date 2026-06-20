@@ -68,6 +68,7 @@ def empty_profile_dict(user_id: str) -> dict[str, Any]:
         "artist_preferences": {},
         "genre_preferences": {},
         "tag_preferences": {},
+        "conversation_affinity": {},
         "feedback_memory": [],
         "version": 1,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -250,6 +251,7 @@ class UserProfile:
     genre_preferences: dict[str, float] = field(default_factory=dict)
     tag_preferences: dict[str, float] = field(default_factory=dict)
     feedback_memory: list[dict[str, Any]] = field(default_factory=list)
+    conversation_affinity: dict[str, float] = field(default_factory=dict)
     version: int = 1
     updated_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
@@ -262,6 +264,7 @@ class UserProfile:
             "artist_preferences": deepcopy(self.artist_preferences),
             "genre_preferences": deepcopy(self.genre_preferences),
             "tag_preferences": deepcopy(self.tag_preferences),
+            "conversation_affinity": deepcopy(self.conversation_affinity),
             "feedback_memory": deepcopy(self.feedback_memory),
             "version": self.version,
             "updated_at": self.updated_at,
@@ -283,8 +286,12 @@ class UserProfile:
             "version",
             "updated_at",
         }
+        # conversation_affinity is an optional, newer field: tolerate its
+        # presence (new profiles) and its absence (profiles written before it
+        # existed) without failing the strict unknown-field check.
+        optional = {"conversation_affinity"}
         missing = sorted(required - set(value))
-        unknown = sorted(set(value) - required)
+        unknown = sorted(set(value) - required - optional)
         if missing:
             raise ProfileValidationError(
                 f"profile is missing fields: {', '.join(missing)}"
@@ -311,6 +318,10 @@ class UserProfile:
         patch = validate_profile_patch(
             {key: value[key] for key in TOP_LEVEL_IMPORT_FIELDS}
         )
+        affinity = _validate_preferences(
+            value.get("conversation_affinity", {}),
+            "conversation_affinity",
+        )
         return cls(
             user_id=value["user_id"].strip(),
             collection_song_ids=patch["collection_song_ids"],
@@ -318,6 +329,7 @@ class UserProfile:
             genre_preferences=patch["genre_preferences"],
             tag_preferences=patch["tag_preferences"],
             feedback_memory=patch["feedback_memory"],
+            conversation_affinity=affinity,
             version=value["version"],
             updated_at=value["updated_at"],
         )
