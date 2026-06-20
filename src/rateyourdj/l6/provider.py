@@ -23,6 +23,7 @@ class AgentDecision:
     arguments: dict[str, Any] = field(default_factory=dict)
     request_patch: dict[str, Any] = field(default_factory=dict)
     response_text: str | None = None
+    thought: str = ""
 
     def __post_init__(self) -> None:
         if self.kind == "tool" and not self.tool_name:
@@ -40,6 +41,8 @@ class AgentDecision:
             "summary": self.summary,
             "request_patch": dict(self.request_patch),
         }
+        if self.thought:
+            value["thought"] = self.thought
         if self.tool_name is not None:
             value["tool_name"] = self.tool_name
             value["arguments"] = dict(self.arguments)

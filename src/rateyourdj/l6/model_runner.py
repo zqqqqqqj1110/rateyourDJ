@@ -291,6 +291,7 @@ def execute_model_loop(
             "loop_phase": loop_phase_for_tool(observation.tool),
             "arguments": dict(arguments),
             "observation": observation.to_dict(),
+            "thought": decision.thought,
             "decision": decision.summary,
             "decision_source": "model",
         }

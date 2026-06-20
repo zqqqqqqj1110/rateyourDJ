@@ -34,6 +34,13 @@ _UPDATE_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
+                "thought": {
+                    "type": "string",
+                    "description": (
+                        "ReAct reasoning: why this request update is needed now. "
+                        "Required."
+                    ),
+                },
                 "summary": {"type": "string"},
                 "request_patch": {
                     "type": "object",
@@ -78,7 +85,7 @@ _UPDATE_TOOL = {
                     "additionalProperties": False,
                 },
             },
-            "required": ["summary", "request_patch"],
+            "required": ["thought", "summary", "request_patch"],
             "additionalProperties": False,
         },
     },
@@ -95,18 +102,34 @@ _FINISH_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
+                "thought": {
+                    "type": "string",
+                    "description": (
+                        "ReAct reasoning: why finishing now is justified. "
+                        "Required."
+                    ),
+                },
                 "summary": {"type": "string"},
                 "response_text": {"type": "string"},
             },
-            "required": ["summary"],
+            "required": ["thought", "summary"],
             "additionalProperties": False,
         },
     },
 }
 
 _SYSTEM_PROMPT = """\
-You are the rateyourDJ recommendation orchestration agent.
-Choose exactly one function per turn.
+You are the rateyourDJ recommendation orchestration agent, and you operate as a
+ReAct agent: you reason then act, one step at a time, observing tool results
+before deciding the next step.
+
+On EVERY step you call exactly one function, and EVERY function call must include
+a `thought` argument: one or two sentences of explicit reasoning that (a) reflect
+on the latest observation in the tool history and (b) justify the action you are
+about to take. The thought is a concise rationale, not hidden chain-of-thought;
+do not include private deliberation, just the verifiable reasoning for this step.
+
+Action policy:
 First correct the structured request with agent_update_request when the fallback
 parser missed user intent. Then use the provided read-only tools to find
 recommendation candidates. If search_tracks is available, prefer it for new music
@@ -116,8 +139,8 @@ tracks. Finish with agent_finish only when constraints are satisfied or the
 profile is empty.
 
 Never access another user. Never weaken explicit exclusions, song count,
-similarity, artist diversity, or exclude-seen constraints. Do not record or reveal
-hidden chain-of-thought. Put only a short, verifiable action summary in `summary`.
+similarity, artist diversity, or exclude-seen constraints. Put only a short,
+verifiable action summary in `summary`, and the step rationale in `thought`.
 Do not copy historical session constraints into a new recommendation unless the
 user asks for another batch or explicitly refers to the prior request.
 When the user is dissatisfied with the prior batch, wants something more like
@@ -133,6 +156,17 @@ available and no provider search has run, call search_tracks before local rankin
 If remaining_steps is 2 or less and no candidate-producing tool has run, call
 search_tracks when available; otherwise call rank_candidates/L4__rank_candidates.
 """
+
+# Injected into every tool's parameters so the model must reason before acting.
+_THOUGHT_PROPERTY = {
+    "thought": {
+        "type": "string",
+        "description": (
+            "One or two sentences of explicit ReAct reasoning: reflect on the "
+            "latest observation and justify this action. Required."
+        ),
+    }
+}
 
 
 _QA_SYSTEM_PROMPT = """\
@@ -359,11 +393,16 @@ class DeepSeekProvider:
         properties = parameters.get("properties", {})
         if isinstance(properties, dict):
             properties.pop("user_id", None)
+            # Inject a required `thought` so the model reasons before acting.
+            properties.update(_THOUGHT_PROPERTY)
         required = parameters.get("required")
         if isinstance(required, list):
-            parameters["required"] = [
-                name for name in required if name != "user_id"
-            ]
+            required = [name for name in required if name != "user_id"]
+        else:
+            required = []
+        if "thought" not in required:
+            required = ["thought", *required]
+        parameters["required"] = required
         return {
             "type": "function",
             "function": {
@@ -411,6 +450,14 @@ class DeepSeekProvider:
         if not isinstance(arguments, dict):
             raise LLMResponseError("DeepSeek tool arguments must be an object")
 
+        # ReAct: pull the explicit reasoning out so it is recorded on the
+        # decision, not passed downstream as a tool argument or request patch.
+        thought = ""
+        if "thought" in arguments:
+            raw_thought = arguments.pop("thought")
+            if isinstance(raw_thought, str):
+                thought = raw_thought.strip()
+
         if external_name == "agent_update_request":
             summary = arguments.get("summary") or "update structured request"
             patch = arguments.get("request_patch")
@@ -440,6 +487,7 @@ class DeepSeekProvider:
                 kind="update",
                 summary=summary,
                 request_patch=patch,
+                thought=thought,
             )
         if external_name == "agent_finish":
             summary = arguments.get("summary")
@@ -454,6 +502,7 @@ class DeepSeekProvider:
                 kind="finish",
                 summary=summary,
                 response_text=response_text,
+                thought=thought,
             )
         try:
             internal_name = tool_name_map[external_name]
@@ -466,6 +515,7 @@ class DeepSeekProvider:
             tool_name=internal_name,
             arguments=arguments,
             summary=f"call {internal_name}",
+            thought=thought,
         )
 
 
