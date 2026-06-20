@@ -1,6 +1,122 @@
 # rateyourDJ
 
-本项目当前目标是：读取用户收藏歌单，为收藏歌曲建立 metadata、tags 和 genres 画像，并推荐尚未收藏的相似歌曲。
+rateyourDJ 是一个**对话式音乐推荐 agent**:你像聊天一样告诉它想听什么,它用
+DeepSeek 作为生成式发现引擎现场提名歌曲,再用 Spotify / Last.fm 等真实音乐 API
+**逐一确认这些歌真实存在**(grounding,过滤掉模型编造的幻觉),最后给出可试听、
+可收藏、可反馈的推荐。你的点赞 / 收藏 / 跳过会沉淀成长期画像,让它越来越懂你。
+
+它不是传统的"扫描固定曲库做相似度排序"的推荐器,而是一个**会推理、会调工具、
+会被外部事实约束**的 LLM agent——整套循环采用 ReAct(每步先显式推理 Thought,
+再选择动作 Action,观察结果 Observation),并把完整轨迹留存用于评估与训练。
+
+> 本项目以展示 **agent 架构设计 + LLM 工程**为目标,代码量级是"清晰可跑的创意
+> 项目",不是工业级系统。仅供本地运行,未做生产加固(开发服务器、无鉴权)。
+
+## 快速开始
+
+```bash
+# 1. 克隆并进入项目
+git clone <your-repo-url> rateyourDJ
+cd rateyourDJ
+
+# 2. 安装(可编辑模式,改代码无需重装;带上开发依赖)
+python3 -m pip install -e ".[dev]"
+
+# 3. 配置 API key(可选但推荐)
+cp .env.example .env
+#   编辑 .env,填入 DEEPSEEK_API_KEY、SPOTIFY_CLIENT_ID/SECRET、LASTFM_API_KEY
+#   不填 key 也能启动:会自动降级到规则路径,只是不会有 DeepSeek 生成和试听
+
+# 4. 启动 Web 应用
+rateyourdj-web
+#   浏览器打开 http://127.0.0.1:8000,开始对话
+```
+
+没有 API key 时:DeepSeek 生成式发现降级为规则路径,Spotify 试听不可用,但
+对话界面、收藏、反馈闭环仍可体验。
+
+### 环境变量
+
+| 变量 | 用途 | 不配的后果 |
+| --- | --- | --- |
+| `DEEPSEEK_API_KEY` | 生成式发现引擎 + 问答 | 降级为规则推荐,问答给出提示 |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | 候选歌确认、metadata、试听 | 无法 grounding 与试听 |
+| `LASTFM_API_KEY` | 标签、相似艺人扩展 | 相似艺人扩展不可用 |
+
+## 这个项目包含什么
+
+**Web 应用(`web/`)** —— 纯对话式前端(原生 HTML/CSS/JS,无构建步骤):聊天流 +
+歌曲卡片(内嵌 Spotify 试听 + 收藏 / 点赞 / 点踩 / 跳过)+ 可收起的收藏抽屉。
+会话与画像跨刷新持久化;支持"问答"(聊乐队/歌曲来历)与"推荐"两种意图,问答时
+还会顺带推荐相关歌。
+
+**分层 agent 架构(`l1`–`l7`)**
+
+| 层 | 职责 |
+| --- | --- |
+| L1 用户画像 | 收藏、艺人/流派/标签偏好、反馈记忆、对话学到的 `conversation_affinity` |
+| L2 歌曲画像 | 歌曲 metadata、tags、genres |
+| L3 召回 | 候选检索 |
+| L4 排序 | 结合画像与反馈的打分排序 |
+| L5 反馈 | 行为 → reward → 更新画像(play/like/skip/favorite… 映射为奖励) |
+| L6 编排 | ReAct agent 循环、DeepSeek provider、会话记忆、工具注册表、问答路由 |
+| L7 评估/导出 | 轨迹导出、离线评估套件、质量指标、A/B 对照 |
+
+**生成式发现(`domain/`)** —— `DiscoveryService`:LLM 提名 → provider 确认 →
+丢弃幻觉,并报告 generated/grounded/dropped/幻觉率。
+
+**音乐 provider(`providers/`)** —— Spotify 搜索、Last.fm 相似艺人、metadata。
+
+**训练管线(`training/`)** —— 把收集的轨迹转成 SFT(`{prompt, completion}` 的
+ReAct 轨迹)和 GRPO(按 query 分组 + 反馈奖励)训练样本,并用 trl/peft 提供
+LoRA SFT 与 GRPO 训练脚本。
+> ⚠️ 训练**代码已就绪、可在 GPU 上运行**,但**尚未训练出任何模型 checkpoint**。
+> 数据准备(`build-sft`/`build-grpo`)无需 GPU、随处可跑;实际训练需要
+> `pip install -e ".[training]"` 和一块 GPU。
+
+## 命令行工具
+
+安装后可直接使用以下命令(等价写法:`PYTHONPATH=src python3 -m rateyourdj.<mod>.cli`):
+
+```bash
+rateyourdj-web                         # 启动对话式 Web 应用
+
+# 评估与分析
+rateyourdj-l7 run-eval-suite           # 50 个用例的行为回归评估
+rateyourdj-l7 trajectory-quality       # grounding 幻觉率 + ReAct 轨迹质量指标
+rateyourdj-l7 trajectory-quality --gate  # 作为 CI 门禁(超标 exit 1)
+rateyourdj-l7 ab-compare               # 离线 A/B:rules vs model(ReAct),无需 key
+rateyourdj-l7 export data/dataset.jsonl  # 导出训练用轨迹数据集
+
+# 训练数据准备(无需 GPU)
+rateyourdj-train build-sft  data/dataset.jsonl data/sft.jsonl --min-reward 0
+rateyourdj-train build-grpo data/dataset.jsonl data/grpo.jsonl
+# 实际训练(需 GPU + pip install -e ".[training]")
+rateyourdj-train train-sft  data/sft.jsonl
+rateyourdj-train train-grpo data/grpo.jsonl
+```
+
+## 测试
+
+```bash
+PYTHONPATH=src python3 -m pytest tests -q     # 全量单元测试
+rateyourdj-l7 run-eval-suite                  # 行为回归(50 用例)
+```
+
+CI(`.github/workflows/ci.yml`)在每次 push / PR 上跑:单元测试 → 评估套件 →
+轨迹质量门禁。
+
+## 评估能力
+
+- **行为正确性**:50 用例评估套件(stop reason、工具路径、约束遵守…)。
+- **Agent 指标**:工具调用成功率、grounding 自验证通过率、ReAct thought 覆盖率、
+  平均 / p95 响应时间。
+- **Grounding 质量**:generated/grounded/dropped、平均幻觉率,可设阈值门禁。
+- **A/B 离线对照**:同一批 query 跑两种配置并排比指标(如 rules vs model/ReAct)。
+
+---
+
+> 以下为详细分层设计文档。
 
 ## 1. 总体流程
 
