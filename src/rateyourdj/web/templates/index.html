@@ -120,6 +120,27 @@
           <button type="submit" class="primary-button">问 DJ</button>
         </form>
         <p id="agent-response" class="agent-response hidden"></p>
+        <details id="agent-debug-panel" class="agent-debug hidden">
+          <summary>查看本次 agent debug</summary>
+          <div class="agent-debug-grid">
+            <div class="agent-debug-item">
+              <span>anchor artist</span>
+              <b id="debug-anchor-artists">-</b>
+            </div>
+            <div class="agent-debug-item">
+              <span>expanded artists</span>
+              <b id="debug-expanded-artists">-</b>
+            </div>
+            <div class="agent-debug-item agent-debug-item-wide">
+              <span>final search query</span>
+              <b id="debug-search-query">-</b>
+            </div>
+            <div class="agent-debug-item agent-debug-item-wide">
+              <span>search plan</span>
+              <b id="debug-search-plan">-</b>
+            </div>
+          </div>
+        </details>
       </section>
 
       <section class="recommendations-section">

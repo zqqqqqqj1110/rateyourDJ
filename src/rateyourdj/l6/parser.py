@@ -77,7 +77,16 @@ def parse_agent_request(query: str, *, default_top_k: int = 10) -> AgentRequest:
         "more"
         if any(
             marker in lowered
-            for marker in ("换一批", "再来", "more", "another batch")
+            for marker in (
+                "换一批",
+                "再来",
+                "more",
+                "another batch",
+                "还是不够像",
+                "更像",
+                "类似",
+                "差不多像",
+            )
         )
         else "recommend"
     )
@@ -130,6 +139,9 @@ def parse_agent_request(query: str, *, default_top_k: int = 10) -> AgentRequest:
         if term not in destination:
             destination.append(term)
 
+    reference_artists = _parse_reference_artists(normalized_query)
+    avoid_artists = _parse_avoid_artists(normalized_query)
+
     return AgentRequest(
         query=normalized_query,
         top_k=top_k,
@@ -137,6 +149,9 @@ def parse_agent_request(query: str, *, default_top_k: int = 10) -> AgentRequest:
         min_retrieval_score=min_score,
         preference_terms=preferences,
         exclude_terms=exclusions,
+        reference_artists=reference_artists,
+        avoid_artists=avoid_artists,
+        refinement_notes=[],
         intent=intent,
         exclude_seen=intent == "more",
     )
@@ -185,6 +200,9 @@ def _parse_exclusions(query: str) -> list[str]:
         r"(?:别放|别要|不想听)\s*"
         r"([A-Za-z0-9][A-Za-z0-9 .&'_-]*?)"
         r"(?=[，。！？,;；]|$)",
+        r"(?:不想要|不要)\s*"
+        r"([A-Za-z0-9][A-Za-z0-9 .&'_-]*?)"
+        r"\s*(?:这种|这样的|这类)",
     )
     for pattern in negative_artist_patterns:
         for match in re.finditer(pattern, query, re.I):
@@ -211,6 +229,50 @@ def _referenced_artist_exclusion(query: str) -> str | None:
         if term:
             return term
     return None
+
+
+def _parse_reference_artists(query: str) -> list[str]:
+    artists: list[str] = []
+    patterns = (
+        r"(?:像|更像|类似|差不多像)\s*([A-Za-z0-9][A-Za-z0-9 /&'._-]*?)(?=$|[，。！？,;；]|\s*(?:这样|这样的|这种|这类|一样|的))",
+        r"(?:like|similar to|more like)\s+([A-Za-z0-9][A-Za-z0-9 /&'._-]*?)(?=$|[，。！？,;；])",
+        r"(?:最好是|最好来点)\s*([A-Za-z0-9][A-Za-z0-9 /&'._-]*?)\s*(?:这样|这样的|这种|这类)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, query, re.I):
+            artists.extend(_split_artist_list(match.group(1)))
+    return _unique_normalized_artists(artists)
+
+
+def _parse_avoid_artists(query: str) -> list[str]:
+    artists: list[str] = []
+    patterns = (
+        r"(?:不要|别要|不想要)\s*([A-Za-z0-9][A-Za-z0-9 /&'._-]*?)\s*(?:这种|这样的|这类)",
+        r"(?:not|avoid|exclude)\s+([A-Za-z0-9][A-Za-z0-9 /&'._-]*?)(?=$|[，。！？,;；])",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, query, re.I):
+            artists.extend(_split_artist_list(match.group(1)))
+    return _unique_normalized_artists(artists)
+
+
+def _split_artist_list(value: str) -> list[str]:
+    parts = re.split(r"\s*(?:/|,|，|、| and |&)\s*", value, flags=re.I)
+    result: list[str] = []
+    for part in parts:
+        artist = " ".join(part.strip().casefold().split())
+        if artist and artist not in {"like", "similar to", "more like"}:
+            result.append(artist)
+    return result
+
+
+def _unique_normalized_artists(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        artist = " ".join(str(value).strip().casefold().split())
+        if artist and artist not in result:
+            result.append(artist)
+    return result
 
 
 def _is_seen_song_reference(term: str) -> bool:

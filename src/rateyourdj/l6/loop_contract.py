@@ -43,7 +43,7 @@ RECOMMENDATION_LOOP_PHASES: tuple[LoopPhase, ...] = (
     LoopPhase(
         name="external_search",
         goal="search external music providers when configured",
-        allowed_tools=("search_tracks",),
+        allowed_tools=("get_similar_artists", "search_tracks"),
     ),
     LoopPhase(
         name="candidate_enrichment",

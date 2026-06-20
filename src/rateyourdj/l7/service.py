@@ -457,6 +457,7 @@ class TrajectoryDatasetService:
         ]
         user_memory_snapshot = dict(trajectory.user_memory_snapshot)
         session_memory_snapshot = dict(trajectory.session_memory_snapshot)
+        artist_expansion_snapshot = dict(trajectory.artist_expansion_snapshot)
         retrieval_snapshot = dict(trajectory.retrieval_snapshot)
         feedback_events = [
             dict(item) for item in trajectory.feedback_events
@@ -483,6 +484,10 @@ class TrajectoryDatasetService:
                 session_memory_snapshot,
                 user_key,
             )
+            artist_expansion_snapshot = _redact_user_ids(
+                artist_expansion_snapshot,
+                user_key,
+            )
             retrieval_snapshot = _redact_user_ids(
                 retrieval_snapshot,
                 user_key,
@@ -502,6 +507,7 @@ class TrajectoryDatasetService:
             "recommendations": recommendations,
             "user_memory_snapshot": user_memory_snapshot,
             "session_memory_snapshot": session_memory_snapshot,
+            "artist_expansion_snapshot": artist_expansion_snapshot,
             "retrieval_snapshot": retrieval_snapshot,
             "response_text": trajectory.response_text,
             "feedback_events": feedback_events,

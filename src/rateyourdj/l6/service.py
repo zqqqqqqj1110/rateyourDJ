@@ -31,6 +31,7 @@ from .session_context import request_with_session_context
 from .session_ranking import (
     SESSION_MEMORY_RANKING_FIELDS,
     build_session_ranking_context,
+    track_signature_from_ranked_song,
 )
 from .sessions import AgentSession, JsonSessionStore
 from .store import JsonTrajectoryStore
@@ -248,6 +249,17 @@ class RecommendationAgentService:
                 *(str(song["song_id"]) for song in recommendations),
             ]
         )
+        session.seen_track_signatures = unique(
+            [
+                *session.seen_track_signatures,
+                *[
+                    signature
+                    for song in recommendations
+                    for signature in [track_signature_from_ranked_song(song)]
+                    if signature
+                ],
+            ]
+        )
         self.session_store.save(session)
         _mark_phase(
             plan,
@@ -264,6 +276,7 @@ class RecommendationAgentService:
                 "seed_track_ids",
                 "last_recommendation_ids",
                 "seen_track_ids",
+                "seen_track_signatures",
                 "last_run_id",
             ],
         )
@@ -292,6 +305,10 @@ class RecommendationAgentService:
                 user_id,
             ),
             session_memory_snapshot=_session_memory_snapshot(session),
+            artist_expansion_snapshot=_artist_expansion_snapshot(
+                request=request,
+                steps=steps,
+            ),
             retrieval_snapshot=_retrieval_snapshot(
                 recommendations=recommendations,
                 seed_song_ids=seed_song_ids,
@@ -361,6 +378,11 @@ def _response_message(
 ) -> str:
     if stop_reason == "empty_profile":
         return "收藏中还没有可用的种子歌曲，暂时无法生成推荐。"
+    if stop_reason == "external_search_failed":
+        return (
+            "外部音乐搜索执行失败，暂时无法拿到候选歌曲。"
+            "请稍后重试；如果持续失败，检查 Spotify 凭证或网络连接。"
+        )
     if not songs:
         if used_external_search:
             return (
@@ -446,6 +468,7 @@ def _session_memory_snapshot(session: AgentSession) -> dict[str, Any]:
         "preference_terms": list(session.preference_terms),
         "exclude_terms": list(session.exclude_terms),
         "seen_track_ids": list(session.seen_track_ids),
+        "seen_track_signatures": list(session.seen_track_signatures),
         "seed_track_ids": list(session.seed_track_ids),
         "active_constraints": dict(session.active_constraints),
         "last_run_id": session.last_run_id,
@@ -480,6 +503,98 @@ def _retrieval_snapshot(
         "used_external_search": used_external_search,
         "stop_reason": stop_reason,
     }
+
+
+def _artist_expansion_snapshot(
+    *,
+    request: AgentRequest,
+    steps: list[dict[str, Any]],
+) -> dict[str, Any]:
+    for step in reversed(steps):
+        if step.get("tool") != "get_similar_artists":
+            continue
+        observation = step.get("observation")
+        if not isinstance(observation, dict):
+            continue
+        data = observation.get("data")
+        if not isinstance(data, dict):
+            continue
+        artists = data.get("artists")
+        provider_results = data.get("provider_results")
+        if not isinstance(artists, list):
+            artists = []
+        if not isinstance(provider_results, list):
+            provider_results = []
+        return {
+            "reference_artists": list(request.reference_artists),
+            "expanded_artists": [
+                str(item.get("name", "")).strip()
+                for item in artists
+                if isinstance(item, dict) and str(item.get("name", "")).strip()
+            ],
+            "provider_results": [dict(item) for item in provider_results if isinstance(item, dict)],
+            "search_queries": _artist_expansion_search_queries(steps),
+            "tool_status": str(observation.get("status") or ""),
+            "diagnostics": [
+                str(item) for item in observation.get("diagnostics", [])
+            ]
+            if isinstance(observation.get("diagnostics"), list)
+            else [],
+        }
+    return {
+        "reference_artists": list(request.reference_artists),
+        "expanded_artists": [],
+        "provider_results": [],
+        "search_queries": _artist_expansion_search_queries(steps),
+        "tool_status": "not_run",
+        "diagnostics": [],
+    }
+
+
+def _artist_expansion_search_queries(
+    steps: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    queries: list[dict[str, Any]] = []
+    for step in steps:
+        if step.get("tool") != "search_tracks":
+            continue
+        arguments = step.get("arguments")
+        observation = step.get("observation")
+        if not isinstance(arguments, dict):
+            continue
+        status = ""
+        result_count = 0
+        diagnostics: list[str] = []
+        if isinstance(observation, dict):
+            status = str(observation.get("status") or "")
+            data = observation.get("data")
+            if isinstance(data, dict) and isinstance(data.get("tracks"), list):
+                result_count = len(data.get("tracks") or [])
+            diagnostics = [
+                str(item)
+                for item in observation.get("diagnostics", [])
+                if isinstance(item, str)
+            ] if isinstance(observation.get("diagnostics"), list) else []
+        queries.append(
+            {
+                "query": str(arguments.get("query") or ""),
+                "tier": str(arguments.get("search_tier") or ""),
+                "anchor_artists": [
+                    str(item)
+                    for item in arguments.get("anchor_artists", [])
+                    if str(item).strip()
+                ] if isinstance(arguments.get("anchor_artists"), list) else [],
+                "expanded_artists": [
+                    str(item)
+                    for item in arguments.get("expanded_artists", [])
+                    if str(item).strip()
+                ] if isinstance(arguments.get("expanded_artists"), list) else [],
+                "status": status,
+                "result_count": result_count,
+                "diagnostics": diagnostics,
+            }
+        )
+    return queries
 
 
 def _initialized_loop_plan() -> list[dict[str, Any]]:

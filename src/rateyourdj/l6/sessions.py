@@ -27,6 +27,7 @@ class AgentSession:
     preference_terms: list[str] = field(default_factory=list)
     exclude_terms: list[str] = field(default_factory=list)
     seen_track_ids: list[str] = field(default_factory=list)
+    seen_track_signatures: list[str] = field(default_factory=list)
     seed_track_ids: list[str] = field(default_factory=list)
     active_constraints: dict[str, Any] = field(default_factory=dict)
     last_run_id: str | None = None
@@ -210,6 +211,9 @@ def _migrate_session_payload(value: dict[str, Any]) -> dict[str, Any]:
         "preference_terms": _string_list(value.get("preference_terms", [])),
         "exclude_terms": exclude_terms,
         "seen_track_ids": _string_list(seen_track_ids),
+        "seen_track_signatures": _string_list(
+            value.get("seen_track_signatures", [])
+        ),
         "seed_track_ids": _string_list(value.get("seed_track_ids", [])),
         "active_constraints": active_constraints,
         "last_run_id": _optional_string(

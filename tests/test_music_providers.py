@@ -4,9 +4,11 @@ from unittest.mock import patch
 from rateyourdj.providers import (
     CollectorMetadataProvider,
     ExternalMusicProvider,
+    LastfmSimilarArtistsProvider,
     ProviderError,
     ProviderSearchResult,
     ProviderTrack,
+    ProviderSimilarArtistsResult,
     SpotifySearchProvider,
     TrackQuery,
     configured_music_provider_from_env,
@@ -82,6 +84,18 @@ class FakeSearchProvider:
                 )
             ],
         )
+
+
+class FakeLastfmSimilarCollector:
+    def collect_similar_artists(self, artist, *, limit=10):
+        return {
+            "source": "Last.fm",
+            "artist": artist,
+            "similar_artists": [
+                {"name": "Pulp", "match": 0.92, "url": "https://last.fm/pulp"},
+                {"name": "Suede", "match": 0.88, "url": "https://last.fm/suede"},
+            ][:limit],
+        }
 
 
 class MusicProviderTests(unittest.TestCase):
@@ -164,15 +178,35 @@ class MusicProviderTests(unittest.TestCase):
         provider = ExternalMusicProvider(
             search_providers=[FakeSearchProvider()],
             metadata_provider=metadata,
+            similar_artists_provider=LastfmSimilarArtistsProvider(
+                FakeLastfmSimilarCollector()
+            ),
         )
 
         results = provider.search_tracks("rock")
         track = provider.get_track_metadata(
             TrackQuery(title="Song", artist="Artist")
         )
+        similar_artists = provider.get_similar_artists("Oasis", limit=2)
 
         self.assertEqual(results[0].tracks[0].track_id, "fake:track:1")
         self.assertEqual(track.track_id, "spotify:track:spotify-id")
+        self.assertIsInstance(similar_artists, ProviderSimilarArtistsResult)
+        self.assertEqual(similar_artists.artists[0].name, "Pulp")
+
+    def test_lastfm_similar_artists_provider_normalizes_results(self):
+        provider = LastfmSimilarArtistsProvider(FakeLastfmSimilarCollector())
+
+        result = provider.get_similar_artists("Oasis", limit=2)
+
+        self.assertEqual(result.provider, "lastfm")
+        self.assertEqual(result.artist, "Oasis")
+        self.assertEqual(result.artists[0].name, "Pulp")
+        self.assertAlmostEqual(result.artists[0].score, 0.92)
+        self.assertEqual(
+            result.artists[0].external_urls["lastfm"],
+            "https://last.fm/pulp",
+        )
 
     def test_external_music_provider_requires_configured_capability(self):
         provider = ExternalMusicProvider()
@@ -202,6 +236,7 @@ class MusicProviderTests(unittest.TestCase):
         assert provider is not None
         self.assertEqual(len(provider.search_providers), 1)
         self.assertIsNotNone(provider.metadata_provider)
+        self.assertIsNotNone(provider.similar_artists_provider)
 
 
 if __name__ == "__main__":

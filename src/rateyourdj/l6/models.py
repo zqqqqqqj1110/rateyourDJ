@@ -20,6 +20,9 @@ class AgentRequest:
     min_retrieval_score: float = 0.0
     preference_terms: list[str] = field(default_factory=list)
     exclude_terms: list[str] = field(default_factory=list)
+    reference_artists: list[str] = field(default_factory=list)
+    avoid_artists: list[str] = field(default_factory=list)
+    refinement_notes: list[str] = field(default_factory=list)
     intent: str = "recommend"
     exclude_seen: bool = False
 
@@ -31,6 +34,9 @@ class AgentRequest:
             "min_retrieval_score": self.min_retrieval_score,
             "preference_terms": list(self.preference_terms),
             "exclude_terms": list(self.exclude_terms),
+            "reference_artists": list(self.reference_artists),
+            "avoid_artists": list(self.avoid_artists),
+            "refinement_notes": list(self.refinement_notes),
             "intent": self.intent,
             "exclude_seen": self.exclude_seen,
         }
@@ -101,6 +107,7 @@ class AgentTrajectory:
     tool_schema_version: str | None = None
     user_memory_snapshot: dict[str, Any] = field(default_factory=dict)
     session_memory_snapshot: dict[str, Any] = field(default_factory=dict)
+    artist_expansion_snapshot: dict[str, Any] = field(default_factory=dict)
     retrieval_snapshot: dict[str, Any] = field(default_factory=dict)
     ranked_candidates: list[dict[str, Any]] = field(default_factory=list)
     final_recommendations: list[dict[str, Any]] = field(default_factory=list)
@@ -138,6 +145,7 @@ class AgentTrajectory:
             "tool_schema_version": self.tool_schema_version,
             "user_memory_snapshot": dict(self.user_memory_snapshot),
             "session_memory_snapshot": dict(self.session_memory_snapshot),
+            "artist_expansion_snapshot": dict(self.artist_expansion_snapshot),
             "retrieval_snapshot": dict(self.retrieval_snapshot),
             "ranked_candidates": [
                 dict(candidate) for candidate in self.ranked_candidates
@@ -183,6 +191,7 @@ class AgentTrajectory:
             "tool_schema_version",
             "user_memory_snapshot",
             "session_memory_snapshot",
+            "artist_expansion_snapshot",
             "retrieval_snapshot",
             "ranked_candidates",
             "final_recommendations",
@@ -255,6 +264,9 @@ class AgentTrajectory:
             session_memory_snapshot=dict(
                 value.get("session_memory_snapshot", {})
             ),
+            artist_expansion_snapshot=dict(
+                value.get("artist_expansion_snapshot", {})
+            ),
             retrieval_snapshot=dict(value.get("retrieval_snapshot", {})),
             ranked_candidates=[
                 dict(item)
@@ -289,6 +301,9 @@ def agent_schema() -> dict[str, Any]:
             "min_retrieval_score": "number between 0 and 1",
             "preference_terms": ["normalized genre or free-text term"],
             "exclude_terms": ["normalized excluded term"],
+            "reference_artists": ["artist anchors like oasis or blur"],
+            "avoid_artists": ["artists to avoid for this refinement turn"],
+            "refinement_notes": ["short natural-language refinement hints"],
             "intent": "recommend or more",
             "exclude_seen": "whether to omit songs already returned in this session",
         },

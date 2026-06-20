@@ -38,6 +38,9 @@ def request_with_session_context(
             or canonical_preference_terms(session.preference_terms)
         ),
         exclude_terms=unique([*session.exclude_terms, *request.exclude_terms]),
+        reference_artists=list(request.reference_artists),
+        avoid_artists=list(request.avoid_artists),
+        refinement_notes=list(request.refinement_notes),
         intent=request.intent,
         exclude_seen=True,
     )

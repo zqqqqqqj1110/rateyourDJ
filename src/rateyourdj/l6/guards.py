@@ -19,6 +19,9 @@ def apply_request_patch(
         "min_retrieval_score",
         "preference_terms",
         "exclude_terms",
+        "reference_artists",
+        "avoid_artists",
+        "refinement_notes",
         "intent",
         "exclude_seen",
     }
@@ -57,6 +60,13 @@ def apply_request_patch(
         list,
     ):
         raise AgentLoopError("model preference_terms must be a string list")
+    for field_name in (
+        "reference_artists",
+        "avoid_artists",
+        "refinement_notes",
+    ):
+        if field_name in patch and not isinstance(patch[field_name], list):
+            raise AgentLoopError(f"model {field_name} must be a string list")
     values = request.to_dict()
     values.update(patch)
     values["preference_terms"] = unique(
@@ -79,6 +89,21 @@ def apply_request_patch(
             ),
         ]
     )
+    for field_name in (
+        "reference_artists",
+        "avoid_artists",
+        "refinement_notes",
+    ):
+        values[field_name] = unique(
+            [
+                *getattr(request, field_name),
+                *(
+                    patch.get(field_name, [])
+                    if isinstance(patch.get(field_name, []), list)
+                    else []
+                ),
+            ]
+        )
     if (
         isinstance(values["top_k"], bool)
         or not isinstance(values["top_k"], int)
@@ -98,7 +123,13 @@ def apply_request_patch(
         or not 0 <= float(min_score) <= 1
     ):
         raise AgentLoopError("model min_retrieval_score must be between 0 and 1")
-    for field_name in ("preference_terms", "exclude_terms"):
+    for field_name in (
+        "preference_terms",
+        "exclude_terms",
+        "reference_artists",
+        "avoid_artists",
+        "refinement_notes",
+    ):
         terms = values[field_name]
         if (
             not isinstance(terms, list)
@@ -114,9 +145,12 @@ def apply_request_patch(
     if values["intent"] not in {"recommend", "more"}:
         raise AgentLoopError("model intent must be recommend or more")
     if request.intent != "more" and values["intent"] == "more":
-        raise AgentLoopError("model cannot invent a more intent")
+        if not query_implies_refinement(request.query):
+            raise AgentLoopError("model cannot invent a more intent")
     if values["intent"] != "more":
         values["exclude_seen"] = False
+    elif query_implies_refinement(request.query):
+        values["exclude_seen"] = True
     if not isinstance(values["exclude_seen"], bool):
         raise AgentLoopError("model exclude_seen must be boolean")
     return AgentRequest(
@@ -126,6 +160,9 @@ def apply_request_patch(
         min_retrieval_score=float(min_score),
         preference_terms=values["preference_terms"],
         exclude_terms=values["exclude_terms"],
+        reference_artists=values["reference_artists"],
+        avoid_artists=values["avoid_artists"],
+        refinement_notes=values["refinement_notes"],
         intent=values["intent"],
         exclude_seen=values["exclude_seen"],
     )
@@ -187,6 +224,27 @@ def query_has_explicit_count(query: str) -> bool:
             query,
         )
     )
+
+
+def query_implies_refinement(query: str) -> bool:
+    lowered = query.casefold()
+    markers = (
+        "换一批",
+        "再来",
+        "还是不够",
+        "不对",
+        "不要这种",
+        "别是这种",
+        "换个方向",
+        "重新来",
+        "不想要",
+        "不想听",
+        "更像",
+        "像 ",
+        "like ",
+        "more like",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def unique(values: list[str]) -> list[str]:

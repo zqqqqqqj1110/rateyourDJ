@@ -57,6 +57,18 @@ _UPDATE_TOOL = {
                             "type": "array",
                             "items": {"type": "string"},
                         },
+                        "reference_artists": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "avoid_artists": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "refinement_notes": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
                         "intent": {
                             "type": "string",
                             "enum": ["recommend", "more"],
@@ -108,6 +120,14 @@ similarity, artist diversity, or exclude-seen constraints. Do not record or reve
 hidden chain-of-thought. Put only a short, verifiable action summary in `summary`.
 Do not copy historical session constraints into a new recommendation unless the
 user asks for another batch or explicitly refers to the prior request.
+When the user is dissatisfied with the prior batch, wants something more like
+or less like a specific artist/style, or asks to change direction, use
+agent_update_request to express that refinement explicitly. Prefer:
+- intent="more" and exclude_seen=true for follow-up refinements
+- reference_artists for positive anchors like "more like Oasis"
+- avoid_artists and exclude_terms for negative anchors like "not Sex Pistols"
+- refinement_notes for short contrastive hints such as "less punk" or
+  "more melodic"
 Do not repeat agent_update_request or an identical tool call. If search_tracks is
 available and no provider search has run, call search_tracks before local ranking.
 If remaining_steps is 2 or less and no candidate-producing tool has run, call
@@ -309,6 +329,9 @@ class DeepSeekProvider:
                         "min_retrieval_score",
                         "preference_terms",
                         "exclude_terms",
+                        "reference_artists",
+                        "avoid_artists",
+                        "refinement_notes",
                         "intent",
                         "exclude_seen",
                     }

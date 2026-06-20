@@ -9,6 +9,7 @@ from rateyourdj.collectors.spotify import SpotifyCollector
 from .music import (
     CollectorMetadataProvider,
     ExternalMusicProvider,
+    LastfmSimilarArtistsProvider,
     SpotifySearchProvider,
 )
 
@@ -33,6 +34,9 @@ def configured_music_provider_from_env() -> ExternalMusicProvider | None:
     return ExternalMusicProvider(
         search_providers=search_providers,
         metadata_provider=metadata_provider,
+        similar_artists_provider=(
+            LastfmSimilarArtistsProvider(lastfm) if lastfm else None
+        ),
     )
 
 

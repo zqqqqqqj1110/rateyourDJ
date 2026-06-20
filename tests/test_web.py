@@ -81,6 +81,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"rateyourDJ", response.data)
         self.assertIn(b'id="recommendations"', response.data)
+        self.assertIn(b'id="agent-debug-panel"', response.data)
 
     def test_profile_and_recommendation_endpoints(self) -> None:
         profile = self.client.get("/api/profile/user-1")

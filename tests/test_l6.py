@@ -103,6 +103,14 @@ class AgentParserTests(unittest.TestCase):
         self.assertEqual(request.preference_terms, ["british", "rock"])
         self.assertEqual(request.exclude_terms, ["pink floyd"])
 
+    def test_parses_reference_and_avoid_artists_from_similarity_query(self) -> None:
+        request = parse_agent_request(
+            "不要 Sex Pistols 这种，给我更像 Oasis / Blur 的"
+        )
+
+        self.assertEqual(request.reference_artists, ["oasis", "blur"])
+        self.assertEqual(request.avoid_artists, ["sex pistols"])
+
     def test_parses_british_indie_rock(self) -> None:
         request = parse_agent_request(
             "推荐 5 首 2020 年之后的英伦独立摇滚"
@@ -118,6 +126,11 @@ class AgentParserTests(unittest.TestCase):
 
         self.assertEqual(request.intent, "more")
         self.assertTrue(request.exclude_seen)
+
+    def test_similarity_refinement_query_is_treated_as_more(self) -> None:
+        request = parse_agent_request("还是不够像 Oasis，我想要更旋律一点的英伦摇滚")
+
+        self.assertEqual(request.intent, "more")
         self.assertEqual(request.exclude_terms, [])
 
     def test_rejects_empty_query(self) -> None:
@@ -504,7 +517,7 @@ class RecommendationAgentTests(unittest.TestCase):
         )
         self.assertEqual(
             [call["tool"] for call in response.tool_calls],
-            ["get_user_memory", "search_tracks"],
+            ["get_user_memory", "search_tracks", "search_tracks"],
         )
         self.assertGreater(
             response.ranked_songs[0]["score_breakdown"]["profile_match"],
@@ -573,7 +586,10 @@ class RecommendationAgentTests(unittest.TestCase):
             "推荐 1 首 2020 年之后的英伦独立摇滚",
         )
 
-        self.assertEqual(search_provider.queries, ["2020 british indie rock"])
+        self.assertEqual(
+            search_provider.queries,
+            ["2020 britpop british indie rock"],
+        )
         self.assertEqual(
             [song["song_id"] for song in response.ranked_songs],
             ["spotify:track:new"],
@@ -633,7 +649,10 @@ class RecommendationAgentTests(unittest.TestCase):
 
         response = service.recommend("user-1", "给我1首经典的英伦摇滚")
 
-        self.assertEqual(search_provider.queries, ["british rock"])
+        self.assertEqual(
+            search_provider.queries,
+            ["britpop british rock"],
+        )
         self.assertEqual(response.stop_reason, "goal_satisfied")
         self.assertEqual(
             [song["song_id"] for song in response.ranked_songs],
@@ -642,6 +661,381 @@ class RecommendationAgentTests(unittest.TestCase):
         self.assertIn(
             "外部搜索结果",
             response.message,
+        )
+
+    def test_external_provider_search_uses_reference_artists_and_refinement_terms(
+        self,
+    ) -> None:
+        class SearchProvider:
+            queries = []
+
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                self.queries.append(query)
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:wonderwall",
+                            provider="spotify",
+                            title="Wonderwall",
+                            artist="Oasis",
+                            album="(What's The Story) Morning Glory?",
+                            release_year=1995,
+                        )
+                    ],
+                )
+
+        class SimilarArtistsProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake-lastfm"
+
+            def get_similar_artists(self, artist: str, *, limit=10):
+                from rateyourdj.providers import (
+                    ProviderSimilarArtist,
+                    ProviderSimilarArtistsResult,
+                )
+
+                return ProviderSimilarArtistsResult(
+                    provider="fake-lastfm",
+                    artist=artist,
+                    artists=[
+                        ProviderSimilarArtist(
+                            name="Pulp",
+                            provider="fake-lastfm",
+                            score=0.92,
+                        ),
+                        ProviderSimilarArtist(
+                            name="Suede",
+                            provider="fake-lastfm",
+                            score=0.88,
+                        ),
+                    ][:limit],
+                )
+
+        search_provider = SearchProvider()
+        provider = MockLLMProvider([])
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[search_provider],
+                similar_artists_provider=SimilarArtistsProvider(),
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "给我 1 首还是不够像 Oasis，我想要更旋律一点的英伦摇滚",
+        )
+
+        self.assertEqual(response.stop_reason, "insufficient_candidates")
+        self.assertGreaterEqual(len(search_provider.queries), 3)
+        self.assertTrue(
+            any("oasis" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertTrue(
+            any("pulp" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertTrue(
+            any("suede" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertTrue(
+            all(len(query) <= 180 for query in search_provider.queries)
+        )
+
+    def test_external_provider_failure_is_distinct_from_true_empty_results(
+        self,
+    ) -> None:
+        class FailingSearchProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                raise RuntimeError("spotify token endpoint unavailable")
+
+        provider = MockLLMProvider([])
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[FailingSearchProvider()]
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend("user-1", "来点英伦摇滚，最好是oasis这样的")
+
+        self.assertEqual(response.stop_reason, "external_search_failed")
+        self.assertEqual(response.ranked_songs, [])
+        self.assertIn("外部音乐搜索执行失败", response.message)
+        self.assertEqual(
+            [call["tool"] for call in response.tool_calls],
+            ["get_user_memory", "search_tracks"],
+        )
+
+    def test_external_provider_search_excludes_negative_artist_tokens(self) -> None:
+        class SearchProvider:
+            queries = []
+
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                self.queries.append(query)
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:song2",
+                            provider="spotify",
+                            title="Song 2",
+                            artist="Blur",
+                            album="Blur",
+                            release_year=1997,
+                        )
+                    ],
+                )
+
+        class SimilarArtistsProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake-lastfm"
+
+            def get_similar_artists(self, artist: str, *, limit=10):
+                from rateyourdj.providers import (
+                    ProviderSimilarArtist,
+                    ProviderSimilarArtistsResult,
+                )
+
+                if artist.casefold() == "oasis":
+                    artists = [
+                        ProviderSimilarArtist(
+                            name="Pulp",
+                            provider="fake-lastfm",
+                            score=0.92,
+                        ),
+                        ProviderSimilarArtist(
+                            name="Suede",
+                            provider="fake-lastfm",
+                            score=0.88,
+                        ),
+                    ]
+                else:
+                    artists = [
+                        ProviderSimilarArtist(
+                            name="Elastica",
+                            provider="fake-lastfm",
+                            score=0.81,
+                        ),
+                    ]
+                return ProviderSimilarArtistsResult(
+                    provider="fake-lastfm",
+                    artist=artist,
+                    artists=artists[:limit],
+                )
+
+        search_provider = SearchProvider()
+        provider = MockLLMProvider([])
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[search_provider],
+                similar_artists_provider=SimilarArtistsProvider(),
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "给我 1 首不要 Sex Pistols 这种，给我更像 Oasis / Blur 的",
+        )
+
+        self.assertGreaterEqual(len(search_provider.queries), 4)
+        self.assertTrue(
+            any("pulp" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertTrue(
+            any("suede" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertTrue(
+            any("elastica" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertTrue(
+            all(len(query) <= 180 for query in search_provider.queries)
+        )
+
+    def test_external_provider_filters_reference_artist_tracks_for_similarity_queries(
+        self,
+    ) -> None:
+        class SearchProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:oasis",
+                            provider="spotify",
+                            title="Don't Look Back In Anger",
+                            artist="Oasis",
+                            album="(What's The Story) Morning Glory?",
+                            release_year=1995,
+                            tags={"britpop": 1.0},
+                        ),
+                        ProviderTrack(
+                            track_id="spotify:track:pulp",
+                            provider="spotify",
+                            title="Common People",
+                            artist="Pulp",
+                            album="Different Class",
+                            release_year=1995,
+                            tags={"britpop": 1.0},
+                        ),
+                    ],
+                )
+
+        class SimilarArtistsProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake-lastfm"
+
+            def get_similar_artists(self, artist: str, *, limit=10):
+                from rateyourdj.providers import (
+                    ProviderSimilarArtist,
+                    ProviderSimilarArtistsResult,
+                )
+
+                return ProviderSimilarArtistsResult(
+                    provider="fake-lastfm",
+                    artist=artist,
+                    artists=[
+                        ProviderSimilarArtist(
+                            name="Pulp",
+                            provider="fake-lastfm",
+                            score=0.92,
+                        )
+                    ][:limit],
+                )
+
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[SearchProvider()],
+                similar_artists_provider=SimilarArtistsProvider(),
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=MockLLMProvider([]),
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "给我 1 首更像 Oasis 的英伦摇滚",
+        )
+
+        self.assertEqual(response.stop_reason, "goal_satisfied")
+        self.assertEqual(
+            [song["song_id"] for song in response.ranked_songs],
+            ["spotify:track:pulp"],
+        )
+
+    def test_external_provider_filters_irrelevant_low_signal_results(self) -> None:
+        class SearchProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:relevant",
+                            provider="spotify",
+                            title="Live Forever",
+                            artist="Oasis",
+                            album="Definitely Maybe",
+                            release_year=1994,
+                            tags={"britpop": 1.0, "rock": 1.0},
+                        ),
+                        ProviderTrack(
+                            track_id="spotify:track:irrelevant",
+                            provider="spotify",
+                            title="H.I.P.-H.O.P.",
+                            artist="Jazz Addixx",
+                            album="Oxygen",
+                            release_year=2005,
+                        ),
+                    ],
+                )
+
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[SearchProvider()]
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=MockLLMProvider([]),
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "来点英伦摇滚，最好是oasis这样的",
+        )
+
+        self.assertEqual(
+            [song["song_id"] for song in response.ranked_songs],
+            ["spotify:track:relevant"],
         )
 
     def test_external_provider_mode_does_not_fall_back_to_local_ranking(self) -> None:
@@ -798,6 +1192,350 @@ class RecommendationAgentTests(unittest.TestCase):
             response.parsed_request.preference_terms,
             ["british", "rock"],
         )
+
+    def test_model_can_refine_toward_reference_artist_and_exclude_seen(self) -> None:
+        class SearchProvider:
+            queries = []
+
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                self.queries.append(query)
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:wonderwall",
+                            provider="spotify",
+                            title="Wonderwall",
+                            artist="Oasis",
+                            album="(What's The Story) Morning Glory?",
+                            tags={"british": 1.0, "rock": 1.0},
+                        )
+                    ],
+                )
+
+        class SimilarArtistsProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake-lastfm"
+
+            def get_similar_artists(self, artist: str, *, limit=10):
+                from rateyourdj.providers import (
+                    ProviderSimilarArtist,
+                    ProviderSimilarArtistsResult,
+                )
+
+                return ProviderSimilarArtistsResult(
+                    provider="fake-lastfm",
+                    artist=artist,
+                    artists=[
+                        ProviderSimilarArtist(
+                            name="Pulp",
+                            provider="fake-lastfm",
+                            score=0.92,
+                        ),
+                        ProviderSimilarArtist(
+                            name="Suede",
+                            provider="fake-lastfm",
+                            score=0.88,
+                        ),
+                    ][:limit],
+                )
+
+        search_provider = SearchProvider()
+        provider = MockLLMProvider(
+            [
+                AgentDecision(
+                    kind="update",
+                    summary="refine toward Oasis and avoid previous batch",
+                    request_patch={
+                        "intent": "more",
+                        "exclude_seen": True,
+                        "reference_artists": ["Oasis"],
+                        "avoid_artists": ["Sex Pistols"],
+                        "refinement_notes": ["more melodic", "less punk"],
+                    },
+                ),
+                AgentDecision(
+                    kind="tool",
+                    tool_name="search_tracks",
+                    arguments={"query": "oasis british rock", "limit": 5},
+                    summary="search for refined candidates",
+                ),
+            ]
+        )
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[search_provider],
+                similar_artists_provider=SimilarArtistsProvider(),
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=provider,
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "还是不够像 Oasis，我想要更旋律一点的英伦摇滚",
+        )
+
+        self.assertEqual(response.parsed_request.intent, "more")
+        self.assertTrue(response.parsed_request.exclude_seen)
+        self.assertEqual(
+            response.parsed_request.reference_artists,
+            ["oasis"],
+        )
+        self.assertEqual(
+            response.parsed_request.avoid_artists,
+            ["sex pistols"],
+        )
+        self.assertEqual(
+            response.parsed_request.refinement_notes,
+            ["more melodic", "less punk"],
+        )
+        self.assertGreaterEqual(len(search_provider.queries), 4)
+        self.assertTrue(
+            any("pulp" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertTrue(
+            any("suede" in query.casefold() for query in search_provider.queries)
+        )
+        self.assertIn("oasis british rock", search_provider.queries[-1].casefold())
+        self.assertEqual(response.ranked_songs, [])
+
+    def test_external_provider_search_splits_long_blur_oasis_expansion_queries(self) -> None:
+        class SearchProvider:
+            queries = []
+
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                self.queries.append(query)
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[],
+                )
+
+        class SimilarArtistsProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake-lastfm"
+
+            def get_similar_artists(self, artist: str, *, limit=10):
+                from rateyourdj.providers import (
+                    ProviderSimilarArtist,
+                    ProviderSimilarArtistsResult,
+                )
+
+                names = {
+                    "blur": [
+                        "Pulp",
+                        "Elastica",
+                        "Damon Albarn",
+                        "The Good, the Bad & the Queen",
+                        "Gorillaz",
+                        "Suede",
+                    ],
+                    "oasis": [
+                        "Noel Gallagher's High Flying Birds",
+                        "Liam Gallagher",
+                        "Beady Eye",
+                        "The Verve",
+                        "Cast",
+                        "Ocean Colour Scene",
+                    ],
+                }
+                return ProviderSimilarArtistsResult(
+                    provider="fake-lastfm",
+                    artist=artist,
+                    artists=[
+                        ProviderSimilarArtist(
+                            name=name,
+                            provider="fake-lastfm",
+                            score=0.9 - (index * 0.01),
+                        )
+                        for index, name in enumerate(names[artist.casefold()][:limit])
+                    ],
+                )
+
+        search_provider = SearchProvider()
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[search_provider],
+                similar_artists_provider=SimilarArtistsProvider(),
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=MockLLMProvider([]),
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "不要 Sex Pistols 这种，给我更像 Blur / Oasis 的英伦摇滚",
+        )
+
+        self.assertEqual(response.stop_reason, "insufficient_candidates")
+        self.assertGreaterEqual(len(search_provider.queries), 4)
+        self.assertTrue(all(len(query) <= 180 for query in search_provider.queries))
+
+    def test_external_provider_family_penalty_spreads_gallagher_results(self) -> None:
+        class SearchProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:noel-1",
+                            provider="spotify",
+                            title="Live Forever - Radio Session",
+                            artist="Noel Gallagher's High Flying Birds",
+                            album="Council Skies",
+                            tags={"britpop": 1.0, "melodic": 1.0},
+                        ),
+                        ProviderTrack(
+                            track_id="spotify:track:noel-2",
+                            provider="spotify",
+                            title="If I Had A Gun…",
+                            artist="Noel Gallagher's High Flying Birds",
+                            album="Noel Gallagher's High Flying Birds",
+                            tags={"britpop": 1.0, "melodic": 1.0},
+                        ),
+                        ProviderTrack(
+                            track_id="spotify:track:verve",
+                            provider="spotify",
+                            title="Lucky Man",
+                            artist="The Verve",
+                            album="Urban Hymns",
+                            tags={"britpop": 1.0, "melodic": 1.0},
+                        ),
+                    ],
+                )
+
+        class SimilarArtistsProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake-lastfm"
+
+            def get_similar_artists(self, artist: str, *, limit=10):
+                from rateyourdj.providers import (
+                    ProviderSimilarArtist,
+                    ProviderSimilarArtistsResult,
+                )
+
+                return ProviderSimilarArtistsResult(
+                    provider="fake-lastfm",
+                    artist=artist,
+                    artists=[
+                        ProviderSimilarArtist(
+                            name="Noel Gallagher's High Flying Birds",
+                            provider="fake-lastfm",
+                            score=0.95,
+                        ),
+                        ProviderSimilarArtist(
+                            name="The Verve",
+                            provider="fake-lastfm",
+                            score=0.88,
+                        ),
+                    ],
+                )
+
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[SearchProvider()],
+                similar_artists_provider=SimilarArtistsProvider(),
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=MockLLMProvider([]),
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "来点更像 Oasis 的英伦摇滚，旋律一点，不要太朋克",
+        )
+
+        self.assertEqual(
+            [song["song_id"] for song in response.ranked_songs[:2]],
+            ["spotify:track:noel-1", "spotify:track:verve"],
+        )
+
+    def test_reference_match_requires_exact_artist_not_substring(self) -> None:
+        class SearchProvider:
+            @property
+            def provider_name(self) -> str:
+                return "fake"
+
+            def search_tracks(self, query, *, limit=10, market=None):
+                return ProviderSearchResult(
+                    provider="fake",
+                    query=query,
+                    tracks=[
+                        ProviderTrack(
+                            track_id="spotify:track:blurred",
+                            provider="spotify",
+                            title="Blurred Lines",
+                            artist="Robin Thicke",
+                            album="Blurred Lines",
+                            release_year=2013,
+                        )
+                    ],
+                )
+
+        registry = AgentToolRegistryV1.default(
+            self.profile_store,
+            self.song_store,
+            music_provider=ExternalMusicProvider(
+                search_providers=[SearchProvider()]
+            ),
+        )
+        service = RecommendationAgentService(
+            self.service.ranking_service,
+            self.song_store,
+            self.trajectory_store,
+            model_tool_registry=registry,
+            llm_provider=MockLLMProvider([]),
+            agent_mode="model",
+        )
+
+        response = service.recommend(
+            "user-1",
+            "给我 1 首不要 Sex Pistols 这种，给我更像 Blur 的",
+        )
+
+        self.assertEqual(response.ranked_songs, [])
 
     def test_model_cannot_remove_rule_parsed_exclusion(self) -> None:
         provider = MockLLMProvider(

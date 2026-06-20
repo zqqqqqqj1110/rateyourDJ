@@ -16,6 +16,7 @@ CORE_AGENT_TOOLS = {
     "search_tracks",
     "get_track_metadata",
     "get_artist_profile",
+    "get_similar_artists",
     "get_similar_tracks",
     "rank_candidates",
     "explain_recommendations",
@@ -25,6 +26,8 @@ CORE_AGENT_TOOLS = {
 from rateyourdj.providers import (
     ExternalMusicProvider,
     ProviderSearchResult,
+    ProviderSimilarArtist,
+    ProviderSimilarArtistsResult,
     ProviderTrack,
     TrackQuery,
 )
@@ -310,6 +313,30 @@ class FakeMetadataProvider:
         )
 
 
+class FakeSimilarArtistsProvider:
+    @property
+    def provider_name(self):
+        return "fake"
+
+    def get_similar_artists(self, artist: str, *, limit=10):
+        return ProviderSimilarArtistsResult(
+            provider="fake",
+            artist=artist,
+            artists=[
+                ProviderSimilarArtist(
+                    name="Pulp",
+                    provider="fake",
+                    score=0.9,
+                ),
+                ProviderSimilarArtist(
+                    name="Suede",
+                    provider="fake",
+                    score=0.8,
+                ),
+            ][:limit],
+        )
+
+
 class AgentToolRegistryV1ProviderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -319,6 +346,7 @@ class AgentToolRegistryV1ProviderTests(unittest.TestCase):
         self.music_provider = ExternalMusicProvider(
             search_providers=[FakeSearchProvider()],
             metadata_provider=FakeMetadataProvider(),
+            similar_artists_provider=FakeSimilarArtistsProvider(),
         )
         self.registry = AgentToolRegistryV1.default(
             self.profile_store,
@@ -371,6 +399,25 @@ class AgentToolRegistryV1ProviderTests(unittest.TestCase):
             "fake:track:metadata",
         )
         self.assertEqual(observation.data["tracks"][0]["tags"]["britpop"], 1.0)
+
+    def test_get_similar_artists_uses_external_provider(self) -> None:
+        observation = self.registry.call(
+            "get_similar_artists",
+            artist_names=["Oasis"],
+            limit=2,
+        )
+
+        self.assertEqual(observation.tool, "get_similar_artists")
+        self.assertEqual(observation.status, "ok")
+        self.assertEqual(
+            observation.data["provider_results"][0]["provider"],
+            "fake",
+        )
+        self.assertEqual(observation.data["artists"][0]["name"], "Pulp")
+        self.assertEqual(
+            observation.data["artists"][0]["source_artist"],
+            "Oasis",
+        )
 
 
 if __name__ == "__main__":

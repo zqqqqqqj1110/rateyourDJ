@@ -25,6 +25,7 @@ class SessionRankingContext:
     preference_terms: list[str]
     exclude_terms: list[str]
     excluded_song_ids: set[str]
+    excluded_track_signatures: set[str]
     seed_track_ids: list[str]
     active_constraints: dict[str, Any]
     temporary_feedback: list[dict[str, Any]]
@@ -67,6 +68,11 @@ def build_session_ranking_context(
     if request.exclude_seen or bool(active_constraints.get("exclude_seen")):
         effective_excluded_song_ids.update(session.seen_track_ids)
     effective_excluded_song_ids.update(feedback_excluded_song_ids)
+    effective_excluded_track_signatures = {
+        normalized(signature)
+        for signature in session.seen_track_signatures
+        if normalized(signature)
+    }
     effective_seed_track_ids = unique(
         [
             *session.seed_track_ids,
@@ -86,6 +92,7 @@ def build_session_ranking_context(
         [
             *session.exclude_terms,
             *request.exclude_terms,
+            *request.avoid_artists,
             *[
                 artist
                 for artist in feedback_excluded_artists
@@ -97,6 +104,7 @@ def build_session_ranking_context(
         preference_terms=list(request.preference_terms),
         exclude_terms=effective_exclude_terms,
         excluded_song_ids=effective_excluded_song_ids,
+        excluded_track_signatures=effective_excluded_track_signatures,
         seed_track_ids=effective_seed_track_ids,
         active_constraints=active_constraints,
         temporary_feedback=[dict(item) for item in session.temporary_feedback],
@@ -112,6 +120,7 @@ def apply_session_ranking_filters(
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     artist_counts: dict[str, int] = {}
+    seen_signatures: set[str] = set(context.excluded_track_signatures)
     for ranked_song in ranked_songs:
         song_id = str(ranked_song["song_id"])
         if song_id in context.excluded_song_ids:
@@ -137,6 +146,13 @@ def apply_session_ranking_filters(
             for term in effective_preference_terms(context.preference_terms)
         ):
             continue
+        signature = (
+            track_signature_from_profile(profile)
+            if profile is not None
+            else track_signature_from_ranked_song(ranked_song)
+        )
+        if signature and signature in seen_signatures:
+            continue
         artist = normalized(
             str(
                 profile.metadata.get("artist")
@@ -152,6 +168,8 @@ def apply_session_ranking_filters(
         evidence = dict(enriched.get("evidence") or {})
         evidence.update(context.evidence())
         enriched["evidence"] = evidence
+        if signature:
+            seen_signatures.add(signature)
         result.append(enriched)
     return result
 
@@ -238,6 +256,48 @@ def effective_preference_terms(terms: list[str]) -> list[str]:
     }
     specific = [term for term in expanded if term not in broad_terms]
     return specific or expanded
+
+
+def track_signature(title: str, artist: str) -> str:
+    normalized_title = normalized(title)
+    normalized_artist = normalized(artist)
+    if not normalized_title or not normalized_artist:
+        return ""
+    normalized_title = _strip_version_suffix(normalized_title)
+    return f"{normalized_artist}::{normalized_title}"
+
+
+def track_signature_from_profile(song: SongProfile) -> str:
+    return track_signature(
+        str(song.metadata.get("title") or ""),
+        str(song.metadata.get("artist") or ""),
+    )
+
+
+def track_signature_from_ranked_song(ranked_song: dict[str, Any]) -> str:
+    return track_signature(
+        str(ranked_song.get("title") or ""),
+        str(ranked_song.get("artist") or ""),
+    )
+
+
+def _strip_version_suffix(title: str) -> str:
+    stripped = compact(title)
+    for marker in (
+        "remaster",
+        "remastered",
+        "deluxe",
+        "radio2session",
+        "session",
+        "live",
+        "edit",
+        "version",
+        "mono",
+        "stereo",
+    ):
+        if marker in stripped:
+            stripped = stripped.split(marker, 1)[0]
+    return stripped.strip("-_ ") or compact(title)
 
 
 def _song_exists(song_store: JsonSongStore, song_id: str) -> bool:

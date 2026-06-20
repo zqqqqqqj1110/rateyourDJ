@@ -43,6 +43,9 @@ class DeepSeekProviderTests(unittest.TestCase):
                 "min_retrieval_score": 0.0,
                 "preference_terms": ["rock"],
                 "exclude_terms": ["artist b"],
+                "reference_artists": [],
+                "avoid_artists": [],
+                "refinement_notes": [],
                 "intent": "recommend",
                 "exclude_seen": False,
             },
@@ -172,6 +175,34 @@ class DeepSeekProviderTests(unittest.TestCase):
         self.assertEqual(
             decision.request_patch,
             {"exclude_terms": ["pink floyd"]},
+        )
+
+    def test_parses_refinement_fields_from_update_patch(self) -> None:
+        provider = DeepSeekProvider(
+            "test-key",
+            request_json=lambda _payload: tool_response(
+                "agent_update_request",
+                {
+                    "summary": "refine toward oasis and away from punk",
+                    "request_patch": {
+                        "intent": "more",
+                        "exclude_seen": True,
+                        "reference_artists": ["Oasis"],
+                        "avoid_artists": ["Sex Pistols"],
+                        "refinement_notes": ["less punk", "more melodic"],
+                    },
+                },
+            ),
+        )
+
+        decision = provider.next_decision(self.make_turn())
+
+        self.assertEqual(decision.kind, "update")
+        self.assertEqual(decision.request_patch["intent"], "more")
+        self.assertEqual(decision.request_patch["reference_artists"], ["Oasis"])
+        self.assertEqual(
+            decision.request_patch["avoid_artists"],
+            ["Sex Pistols"],
         )
 
     def test_prefers_request_update_when_multiple_tool_calls_are_returned(

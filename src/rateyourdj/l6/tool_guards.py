@@ -172,6 +172,42 @@ def validated_model_tool_arguments(
         arguments["limit"] = limit
         return arguments
 
+    if tool_name == "get_similar_artists":
+        allowed = {"artist_names", "limit", "providers"}
+        if not set(arguments) <= allowed:
+            raise AgentLoopError(
+                "get_similar_artists arguments contain unknown fields"
+            )
+        artist_names = arguments.get("artist_names")
+        if (
+            not isinstance(artist_names, list)
+            or not 1 <= len(artist_names) <= 10
+            or not all(
+                isinstance(name, str) and name.strip()
+                for name in artist_names
+            )
+        ):
+            raise AgentLoopError(
+                "artist_names must be a non-empty string list with max 10 items"
+            )
+        limit = arguments.get("limit", min(request.top_k * 3, 10))
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 25
+        ):
+            raise AgentLoopError("limit must be between 1 and 25")
+        arguments["limit"] = limit
+        providers = arguments.get("providers")
+        if providers is not None and (
+            not isinstance(providers, list)
+            or not all(provider == "lastfm" for provider in providers)
+        ):
+            raise AgentLoopError(
+                "providers must be a list containing only supported providers"
+            )
+        return arguments
+
     if tool_name == "get_track_metadata":
         allowed = {"track_ids", "queries", "include_raw"}
         if not set(arguments) <= allowed:

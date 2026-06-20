@@ -195,6 +195,35 @@ AGENT_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "get_similar_artists",
+        "description": (
+            "Expand anchor artists into externally sourced similar artists for "
+            "similarity-driven recommendation search."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "artist_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "maxItems": 10,
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                "providers": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["lastfm"],
+                    },
+                },
+            },
+            "required": ["artist_names"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "get_track_metadata",
         "description": (
             "Read normalized track metadata, tags, genres, and data quality for "

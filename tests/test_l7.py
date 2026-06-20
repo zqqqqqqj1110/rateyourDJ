@@ -36,6 +36,7 @@ def make_trajectory(
     tool_schema_version: str | None = "agent_tool_schema_v1",
     user_memory_snapshot: dict | None = None,
     session_memory_snapshot: dict | None = None,
+    artist_expansion_snapshot: dict | None = None,
     retrieval_snapshot: dict | None = None,
     fallback_reason: str | None = None,
 ) -> AgentTrajectory:
@@ -78,6 +79,7 @@ def make_trajectory(
         tool_schema_version=tool_schema_version,
         user_memory_snapshot=user_memory_snapshot or {},
         session_memory_snapshot=session_memory_snapshot or {},
+        artist_expansion_snapshot=artist_expansion_snapshot or {},
         retrieval_snapshot=retrieval_snapshot or {},
         stop_reason=stop_reason,
         fallback_reason=fallback_reason,
@@ -136,6 +138,10 @@ class L7ServiceTests(unittest.TestCase):
                     "last_user_query": "推荐两首摇滚",
                     "last_recommendation_ids": ["song-0", "song-1"],
                 },
+                artist_expansion_snapshot={
+                    "reference_artists": ["oasis"],
+                    "expanded_artists": ["pulp", "suede"],
+                },
                 retrieval_snapshot={
                     "seed_song_ids": ["seed"],
                     "retrieval_sources": ["local_cache"],
@@ -192,6 +198,10 @@ class L7ServiceTests(unittest.TestCase):
             "session-1",
         )
         self.assertEqual(
+            record["artist_expansion_snapshot"]["expanded_artists"],
+            ["pulp", "suede"],
+        )
+        self.assertEqual(
             record["retrieval_snapshot"]["seed_song_ids"],
             ["seed"],
         )
@@ -216,6 +226,7 @@ class L7ServiceTests(unittest.TestCase):
         self.assertNotIn("tool_schema_version", rows[0])
         self.assertNotIn("user_memory_snapshot", rows[0])
         self.assertNotIn("session_memory_snapshot", rows[0])
+        self.assertNotIn("artist_expansion_snapshot", rows[0])
         self.assertNotIn("retrieval_snapshot", rows[0])
 
     def test_evaluates_feedback_and_agent_metrics(self) -> None:

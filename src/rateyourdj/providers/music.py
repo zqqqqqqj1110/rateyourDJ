@@ -30,6 +30,19 @@ class ProviderArtist:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderSimilarArtist:
+    name: str
+    provider: str
+    score: float = 0.0
+    provider_artist_id: str | None = None
+    external_urls: dict[str, str] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderTrack:
     track_id: str
     provider: str
@@ -65,6 +78,24 @@ class ProviderSearchResult:
             "provider": self.provider,
             "query": self.query,
             "tracks": [track.to_dict() for track in self.tracks],
+            "cache_hit": self.cache_hit,
+            "diagnostics": list(self.diagnostics),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderSimilarArtistsResult:
+    provider: str
+    artist: str
+    artists: list[ProviderSimilarArtist]
+    cache_hit: bool = False
+    diagnostics: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "artist": self.artist,
+            "artists": [artist.to_dict() for artist in self.artists],
             "cache_hit": self.cache_hit,
             "diagnostics": list(self.diagnostics),
         }
@@ -108,6 +139,20 @@ class SimilarTracksProvider(Protocol):
         limit: int = 10,
         market: str | None = None,
     ) -> ProviderSearchResult:
+        ...
+
+
+class SimilarArtistsProvider(Protocol):
+    @property
+    def provider_name(self) -> str:
+        ...
+
+    def get_similar_artists(
+        self,
+        artist: str,
+        *,
+        limit: int = 10,
+    ) -> ProviderSimilarArtistsResult:
         ...
 
 
@@ -231,6 +276,65 @@ class CollectorMetadataProvider:
         )
 
 
+class LastfmSimilarArtistsProvider:
+    def __init__(self, collector: Any) -> None:
+        self.collector = collector
+
+    @property
+    def provider_name(self) -> str:
+        return "lastfm"
+
+    def get_similar_artists(
+        self,
+        artist: str,
+        *,
+        limit: int = 10,
+    ) -> ProviderSimilarArtistsResult:
+        if not artist.strip():
+            raise ValueError("artist must be non-empty")
+        resolved_limit = _bounded_limit(limit)
+        try:
+            payload = self.collector.collect_similar_artists(
+                artist,
+                limit=resolved_limit,
+            )
+        except Exception as error:
+            raise ProviderError(
+                f"Last.fm similar artist lookup failed: {error}"
+            ) from error
+        similar_artists = payload.get("similar_artists", [])
+        if not isinstance(similar_artists, list):
+            raise ProviderError(
+                "Last.fm similar artist lookup returned malformed artists"
+            )
+        artists: list[ProviderSimilarArtist] = []
+        for item in similar_artists:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            try:
+                score = float(item.get("match", 0.0))
+            except (TypeError, ValueError):
+                score = 0.0
+            url = str(item.get("url", "")).strip()
+            artists.append(
+                ProviderSimilarArtist(
+                    name=name,
+                    provider=self.provider_name,
+                    score=max(0.0, min(score, 1.0)),
+                    external_urls={"lastfm": url} if url else {},
+                    raw={"lastfm": dict(item)},
+                )
+            )
+        return ProviderSimilarArtistsResult(
+            provider=self.provider_name,
+            artist=artist,
+            artists=artists,
+        )
+
+
 class ExternalMusicProvider:
     """Facade that combines search, metadata, and similar-track providers."""
 
@@ -240,10 +344,12 @@ class ExternalMusicProvider:
         search_providers: list[MusicSearchProvider] | None = None,
         metadata_provider: TrackMetadataProvider | None = None,
         similar_provider: SimilarTracksProvider | None = None,
+        similar_artists_provider: SimilarArtistsProvider | None = None,
     ) -> None:
         self.search_providers = list(search_providers or [])
         self.metadata_provider = metadata_provider
         self.similar_provider = similar_provider
+        self.similar_artists_provider = similar_artists_provider
 
     def search_tracks(
         self,
@@ -281,6 +387,19 @@ class ExternalMusicProvider:
             seed_genres=seed_genres,
             limit=limit,
             market=market,
+        )
+
+    def get_similar_artists(
+        self,
+        artist: str,
+        *,
+        limit: int = 10,
+    ) -> ProviderSimilarArtistsResult:
+        if self.similar_artists_provider is None:
+            raise ProviderError("No similar-artists provider is configured")
+        return self.similar_artists_provider.get_similar_artists(
+            artist,
+            limit=limit,
         )
 
 

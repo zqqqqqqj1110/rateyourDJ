@@ -92,6 +92,7 @@ async function loadDashboard() {
     renderProfile(profile, feedback);
     renderCollection(collection);
     recommendations.replaceChildren();
+    hideAgentDebug();
     $("#result-meta").textContent = "等待 agent 推荐";
     state.trajectoryId = null;
   } catch (error) {
@@ -195,6 +196,7 @@ function renderRecommendations(result) {
   recommendations.replaceChildren();
   const songs = normalizeRecommendations(result);
   const trace = result.trace || {};
+  renderAgentDebug(trace);
   const seedSongIds = Array.isArray(trace.seed_song_ids)
     ? trace.seed_song_ids
     : Array.isArray(result.seed_song_ids)
@@ -207,7 +209,16 @@ function renderRecommendations(result) {
     `${songs.length} 首 ${resultLabel} · ${seedSongIds.length} 首种子`;
 
   if (!songs.length) {
-    showMessage("当前没有可推荐歌曲。请放宽条件或换一个搜索描述。");
+    const stopReason = trace.stop_reason || "";
+    if (result.message) {
+      showMessage(result.message);
+    } else if (stopReason === "external_search_failed") {
+      showMessage("外部音乐搜索失败，请稍后重试。");
+    } else if (stopReason === "empty_profile") {
+      showMessage("收藏中还没有可用的种子歌曲，暂时无法生成推荐。");
+    } else {
+      showMessage("当前没有可推荐歌曲。请放宽条件或换一个搜索描述。");
+    }
     return;
   }
 
@@ -257,6 +268,124 @@ function renderRecommendations(result) {
     }
     recommendations.append(node);
   }
+}
+
+function renderAgentDebug(trace) {
+  const panel = $("#agent-debug-panel");
+  if (!trace || typeof trace !== "object") {
+    hideAgentDebug();
+    return;
+  }
+  const parsedRequest =
+    trace.parsed_request && typeof trace.parsed_request === "object"
+      ? trace.parsed_request
+      : {};
+  const anchorArtists = Array.isArray(parsedRequest.reference_artists)
+    ? parsedRequest.reference_artists.filter(Boolean)
+    : [];
+  const toolCalls = Array.isArray(trace.tool_calls) ? trace.tool_calls : [];
+  const similarArtistsCall = toolCalls.find(
+    (call) => call && call.tool === "get_similar_artists"
+  );
+  const searchCall = [...toolCalls]
+    .reverse()
+    .find((call) => call && call.tool === "search_tracks");
+  const expandedArtists = normalizeExpandedArtists(similarArtistsCall);
+  const finalSearchQuery =
+    searchCall &&
+    searchCall.arguments &&
+    typeof searchCall.arguments.query === "string"
+      ? searchCall.arguments.query
+      : "";
+  const searchPlan = normalizeSearchPlan(toolCalls);
+
+  if (
+    !anchorArtists.length &&
+    !expandedArtists.length &&
+    !finalSearchQuery &&
+    !searchPlan.length
+  ) {
+    hideAgentDebug();
+    return;
+  }
+
+  $("#debug-anchor-artists").textContent = anchorArtists.length
+    ? anchorArtists.join(", ")
+    : "—";
+  $("#debug-expanded-artists").textContent = expandedArtists.length
+    ? expandedArtists.join(", ")
+    : "—";
+  $("#debug-search-query").textContent = finalSearchQuery || "—";
+  $("#debug-search-plan").textContent = searchPlan.length
+    ? searchPlan.join(" | ")
+    : "—";
+  panel.classList.remove("hidden");
+}
+
+function normalizeExpandedArtists(similarArtistsCall) {
+  if (
+    !similarArtistsCall ||
+    !similarArtistsCall.observation ||
+    !similarArtistsCall.observation.data
+  ) {
+    return [];
+  }
+  const artists = Array.isArray(similarArtistsCall.observation.data.artists)
+    ? similarArtistsCall.observation.data.artists
+    : [];
+  const names = [];
+  for (const item of artists) {
+    if (!item || typeof item.name !== "string" || !item.name.trim()) {
+      continue;
+    }
+    const normalized = item.name.trim();
+    if (
+      !names.some((existing) => existing.toLowerCase() === normalized.toLowerCase())
+    ) {
+      names.push(normalized);
+    }
+  }
+  return names;
+}
+
+function hideAgentDebug() {
+  $("#agent-debug-panel").classList.add("hidden");
+  $("#debug-anchor-artists").textContent = "-";
+  $("#debug-expanded-artists").textContent = "-";
+  $("#debug-search-query").textContent = "-";
+  $("#debug-search-plan").textContent = "-";
+}
+
+function normalizeSearchPlan(toolCalls) {
+  const searchCalls = Array.isArray(toolCalls)
+    ? toolCalls.filter((call) => call && call.tool === "search_tracks")
+    : [];
+  return searchCalls.map((call) => {
+    const argumentsObject =
+      call.arguments && typeof call.arguments === "object"
+        ? call.arguments
+        : {};
+    const tier =
+      typeof argumentsObject.search_tier === "string" &&
+      argumentsObject.search_tier
+        ? argumentsObject.search_tier
+        : "search";
+    const query =
+      typeof argumentsObject.query === "string" ? argumentsObject.query : "";
+    const anchors = Array.isArray(argumentsObject.anchor_artists)
+      ? argumentsObject.anchor_artists.filter(Boolean)
+      : [];
+    const expanded = Array.isArray(argumentsObject.expanded_artists)
+      ? argumentsObject.expanded_artists.filter(Boolean)
+      : [];
+    const prefix = anchors.length
+      ? `${tier}[${anchors.join(", ")}]`
+      : tier;
+    const expandedSuffix = expanded.length
+      ? ` -> ${expanded.join(", ")}`
+      : "";
+    return `${prefix}${expandedSuffix}: ${query}`;
+  });
 }
 
 function normalizeRecommendations(result) {

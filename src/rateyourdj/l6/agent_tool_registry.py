@@ -156,6 +156,14 @@ class AgentToolRegistryV1:
                 **arguments,
             ),
         )
+        if music_provider is not None:
+            registry.register(
+                "get_similar_artists",
+                lambda **arguments: _get_similar_artists_from_provider(
+                    music_provider=music_provider,
+                    **arguments,
+                ),
+            )
         registry.register(
             "L2.inspect_song_profile",
             lambda **arguments: _as_v1_observation(
@@ -422,6 +430,9 @@ def _session_memory_data(session: Any) -> dict[str, Any]:
         "preference_terms": list(data.get("preference_terms", [])),
         "exclude_terms": list(data.get("exclude_terms", [])),
         "seen_track_ids": list(data.get("seen_track_ids", [])),
+        "seen_track_signatures": list(
+            data.get("seen_track_signatures", [])
+        ),
         "seed_track_ids": list(data.get("seed_track_ids", [])),
         "last_run_id": data.get("last_run_id"),
         "last_recommendation_ids": list(
@@ -656,6 +667,51 @@ def _search_tracks(
         },
         diagnostics=diagnostics,
         retryable=bool(diagnostics or not tracks),
+        suggested_actions=[],
+    )
+
+
+def _get_similar_artists_from_provider(
+    *,
+    music_provider: ExternalMusicProvider,
+    artist_names: list[str],
+    limit: int = 10,
+    **_ignored: Any,
+) -> ToolObservation:
+    provider_results: list[dict[str, Any]] = []
+    artists: list[dict[str, Any]] = []
+    diagnostics: list[str] = []
+    for artist_name in _string_list(artist_names):
+        try:
+            result = music_provider.get_similar_artists(
+                artist_name,
+                limit=limit,
+            )
+        except Exception as error:
+            diagnostics.append(f"{artist_name}: {error}")
+            continue
+        provider_results.append(
+            {
+                "provider": result.provider,
+                "artist": result.artist,
+                "result_count": len(result.artists),
+                "cache_hit": result.cache_hit,
+            }
+        )
+        diagnostics.extend(result.diagnostics)
+        for artist in result.artists:
+            artist_data = artist.to_dict()
+            artist_data["source_artist"] = result.artist
+            artists.append(artist_data)
+    return ToolObservation(
+        tool="get_similar_artists",
+        status="empty" if not artists else "partial" if diagnostics else "ok",
+        data={
+            "provider_results": provider_results,
+            "artists": artists,
+        },
+        diagnostics=diagnostics,
+        retryable=bool(diagnostics or not artists),
         suggested_actions=[],
     )
 
