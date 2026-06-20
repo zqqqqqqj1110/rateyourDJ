@@ -239,8 +239,14 @@ function appendDJReply(result, query) {
   bubble.appendChild(head);
 
   const recs = result.recommendations || [];
+  const isQuestion = result.intent === "question";
   if (recs.length === 0) {
-    bubble.appendChild(el("p", "dj-empty", "这次没找到合适的歌，换个说法试试？"));
+    // 问答类回复：message 本身就是答案，不提示"没找到歌"
+    if (!isQuestion) {
+      bubble.appendChild(
+        el("p", "dj-empty", "这次没找到合适的歌，换个说法试试？")
+      );
+    }
   } else {
     const cards = el("div", "track-cards");
     recs.forEach((rec) => cards.appendChild(buildTrackCard(rec)));

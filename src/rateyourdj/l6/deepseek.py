@@ -135,6 +135,57 @@ search_tracks when available; otherwise call rank_candidates/L4__rank_candidates
 """
 
 
+_QA_SYSTEM_PROMPT = """\
+你是 rateyourDJ，一位懂行、健谈的音乐 DJ 助手。用户在和你聊天，这一条消息是
+一个「问答」而不是让你推荐歌单的请求（例如询问某首歌/某位艺人的来历、风格、
+年代、背景，或追问刚才对话里提到的内容）。
+
+请始终通过调用 answer_with_tracks 函数来回应，包含两部分：
+1. answer：直接、准确地回答问题，用中文，语气自然友好，像懂音乐的朋友聊天。
+   可以适当展开背景、轶事、风格脉络，但保持简洁，一般 2-5 句话。如果用户在追问
+   “刚才/上一首/第二首”，请结合提供的对话历史回答。不要捏造事实；不确定就坦诚说。
+2. suggested_tracks：可选。当你的回答聊到了具体的乐队、歌曲或风格，并且顺带听几首
+   会让对话更连贯时，附上 2-3 首真实存在、与话题高度相关的歌（每首给 title、artist
+   和一句中文 reason 说明为什么推荐它、和话题怎么关联）。
+
+什么时候【不要】附歌：纯事实性的追问（如“刚才第二首叫什么”“这首歌哪年发行的”），
+或话题与具体可听的歌无关时，suggested_tracks 留空即可。不要硬塞歌。
+只提议你确信真实存在的歌曲，用原始录音室版本的标题。
+"""
+
+_ANSWER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "answer_with_tracks",
+        "description": (
+            "Reply to a conversational music question, optionally suggesting a "
+            "few real, relevant tracks the user could listen to next."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "answer": {"type": "string"},
+                "suggested_tracks": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "artist": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["title", "artist"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["answer"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 class DeepSeekProvider:
     def __init__(
         self,
@@ -223,6 +274,51 @@ class DeepSeekProvider:
         except Exception as error:
             raise LLMProviderError(f"DeepSeek request failed: {error}") from error
         return self._parse_decision(response, tool_name_map)
+
+    def answer_question(
+        self,
+        query: str,
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, list[dict[str, str]]]:
+        """Answer a conversational music question, optionally suggesting tracks.
+
+        Returns ``(answer_text, suggested_tracks)`` where each suggested track
+        is ``{"title", "artist", "reason"}``. ``history`` is an optional list of
+        prior turns like ``{"role": "user"|"dj", "text": "..."}`` so the model
+        can resolve references such as "刚才第二首叫什么".
+        """
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": _QA_SYSTEM_PROMPT}
+        ]
+        for turn in (history or [])[-8:]:
+            text = str(turn.get("text") or "").strip()
+            if not text:
+                continue
+            role = "assistant" if turn.get("role") == "dj" else "user"
+            messages.append({"role": role, "content": text})
+        messages.append({"role": "user", "content": query})
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "tools": [_ANSWER_TOOL],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "answer_with_tracks"},
+            },
+            "thinking": {"type": "disabled"},
+            "stream": False,
+            "temperature": 0.7,
+        }
+        try:
+            response = self._request_json(payload)
+        except LLMProviderError:
+            raise
+        except Exception as error:  # noqa: BLE001
+            raise LLMProviderError(
+                f"DeepSeek answer request failed: {error}"
+            ) from error
+        return _parse_answer(response)
 
     def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = Request(
@@ -394,6 +490,60 @@ def configured_llm_provider(
             base_url=base_url,
         )
     raise ValueError("llm_provider must be auto, deepseek, or none")
+
+
+def _parse_answer(
+    response: dict[str, Any],
+) -> tuple[str, list[dict[str, str]]]:
+    """Parse the answer_with_tracks tool call; tolerate a plain content reply."""
+    try:
+        message = response["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as error:
+        raise LLMResponseError(
+            "DeepSeek response is missing choices[0].message"
+        ) from error
+
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        try:
+            arguments = json.loads(tool_calls[0]["function"]["arguments"])
+        except (KeyError, TypeError, json.JSONDecodeError) as error:
+            raise LLMResponseError(
+                "DeepSeek returned invalid answer_with_tracks arguments"
+            ) from error
+        if not isinstance(arguments, dict):
+            raise LLMResponseError("answer_with_tracks arguments must be object")
+        answer = str(arguments.get("answer") or "").strip()
+        tracks = _clean_suggested_tracks(arguments.get("suggested_tracks"))
+        if answer:
+            return answer, tracks
+
+    # Fallback: some responses may carry a plain content string instead.
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip(), []
+    raise LLMResponseError("DeepSeek returned an empty answer")
+
+
+def _clean_suggested_tracks(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    tracks: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        artist = str(item.get("artist") or "").strip()
+        if not title or not artist:
+            continue
+        tracks.append(
+            {
+                "title": title,
+                "artist": artist,
+                "reason": str(item.get("reason") or "").strip(),
+            }
+        )
+    return tracks
 
 
 def _redact_private_fields(value: Any) -> Any:

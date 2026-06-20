@@ -73,23 +73,24 @@ def parse_agent_request(query: str, *, default_top_k: int = 10) -> AgentRequest:
         raise ValueError("query must be a non-empty string")
     normalized_query = " ".join(query.strip().split())
     lowered = normalized_query.casefold()
-    intent = (
-        "more"
-        if any(
-            marker in lowered
-            for marker in (
-                "换一批",
-                "再来",
-                "more",
-                "another batch",
-                "还是不够像",
-                "更像",
-                "类似",
-                "差不多像",
-            )
+    if _is_question_intent(normalized_query, lowered):
+        intent = "question"
+    elif any(
+        marker in lowered
+        for marker in (
+            "换一批",
+            "再来",
+            "more",
+            "another batch",
+            "还是不够像",
+            "更像",
+            "类似",
+            "差不多像",
         )
-        else "recommend"
-    )
+    ):
+        intent = "more"
+    else:
+        intent = "recommend"
     top_k = _parse_count(normalized_query, default_top_k)
     max_per_artist = (
         1
@@ -155,6 +156,84 @@ def parse_agent_request(query: str, *, default_top_k: int = 10) -> AgentRequest:
         intent=intent,
         exclude_seen=intent == "more",
     )
+
+
+_RECOMMEND_MARKERS = (
+    "推荐",
+    "来点",
+    "来几首",
+    "来一首",
+    "给我",
+    "想听",
+    "放点",
+    "放几首",
+    "播放",
+    "整点",
+    "找几首",
+    "找点",
+    "歌单",
+    "recommend",
+    "play ",
+    "suggest",
+)
+
+# 句首/整体疑问标记：用于判断这是一个问答请求而非选歌请求
+_QUESTION_MARKERS = (
+    "什么",
+    "為什麼",
+    "为什么",
+    "为何",
+    "怎么",
+    "怎样",
+    "如何",
+    "是谁",
+    "谁是",
+    "哪个",
+    "哪些",
+    "哪里",
+    "哪一",
+    "多少",
+    "是不是",
+    "有没有故事",
+    "介绍",
+    "介紹",
+    "讲讲",
+    "讲一下",
+    "讲下",
+    "说说",
+    "聊聊",
+    "解释",
+    "科普",
+    "什么来历",
+    "什么背景",
+    "什么故事",
+    "what",
+    "why",
+    "who",
+    "how",
+    "when",
+    "where",
+    "which",
+    "tell me about",
+    "explain",
+)
+
+
+def _is_question_intent(query: str, lowered: str) -> bool:
+    """判断是否为问答请求（而非选歌请求）。
+
+    选歌意图（推荐/来点/想听…）优先：即便句子里带问号，只要明显是在要歌，
+    仍按推荐处理（例如“有没有像 Radiohead 的歌？”）。否则，出现疑问标记或以
+    问号结尾即视为问答（例如“这首歌什么来历？”“Oasis 是谁？”）。
+    """
+    if any(marker in lowered for marker in _RECOMMEND_MARKERS):
+        return False
+    # “有没有/有木有 … 歌/音乐/曲/乐队”属于选歌句式，虽含疑问但意图是要歌。
+    if re.search(r"有(?:没有|木有)[^？?]*(?:歌|音乐|曲|乐队|歌手|专辑)", lowered):
+        return False
+    if any(marker in lowered for marker in _QUESTION_MARKERS):
+        return True
+    return query.rstrip().endswith(("?", "？"))
 
 
 def _parse_count(query: str, default: int) -> int:

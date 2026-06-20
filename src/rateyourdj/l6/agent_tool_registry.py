@@ -830,6 +830,11 @@ def _discovered_track_to_ranked_song(
     }
 
 
+# Public alias so other modules can reuse the ranked-song shaping for
+# grounded DiscoveredTrack items (e.g. Q&A turns that suggest tracks).
+discovered_track_to_ranked_song = _discovered_track_to_ranked_song
+
+
 def _get_similar_artists_from_provider(
     *,
     music_provider: ExternalMusicProvider,

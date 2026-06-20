@@ -28,6 +28,7 @@ from rateyourdj.providers import (
 )
 from rateyourdj.domain import (
     DeepSeekTrackGenerator,
+    DiscoveryService,
     ExplanationGenerator,
     TasteSeedTrackGenerator,
 )
@@ -96,6 +97,12 @@ def create_app(
         ),
         llm_provider=llm_provider,
         agent_mode=agent_mode,
+        discovery_service=(
+            DiscoveryService(resolved_track_generator, resolved_music_provider)
+            if resolved_music_provider is not None
+            and resolved_track_generator is not None
+            else None
+        ),
     )
 
     @app.get("/")
@@ -477,6 +484,11 @@ def _agent_recommend_response_v1(
         "session_id": enriched.get("session_id"),
         "user_id": enriched.get("user_id"),
         "message": enriched.get("message"),
+        "intent": (
+            enriched.get("parsed_request", {}).get("intent")
+            if isinstance(enriched.get("parsed_request"), dict)
+            else None
+        ),
         "recommendations": recommendations,
         "memory_updates": {
             "session_seen_track_ids": [

@@ -6,8 +6,12 @@ from uuid import uuid4
 from rateyourdj.l1 import ProfileNotFoundError, UserProfileService
 from rateyourdj.l2 import JsonSongStore
 from rateyourdj.l4 import RecommendationRankingService
+from rateyourdj.domain import GeneratedCandidate
 
-from .agent_tool_registry import AgentToolRegistryV1
+from .agent_tool_registry import (
+    AgentToolRegistryV1,
+    discovered_track_to_ranked_song,
+)
 from .agent_tool_schemas import AGENT_TOOL_SCHEMA_VERSION
 from .errors import AgentLoopError
 from .guards import unique
@@ -50,6 +54,7 @@ class RecommendationAgentService:
         model_tool_registry: AgentToolRegistryV1 | None = None,
         llm_provider: LLMProvider | None = None,
         agent_mode: str = "auto",
+        discovery_service: Any | None = None,
     ) -> None:
         self.ranking_service = ranking_service
         self.song_store = song_store
@@ -57,6 +62,8 @@ class RecommendationAgentService:
         self.profile_service = UserProfileService(
             ranking_service.profile_store
         )
+        # Used to ground tracks the chat answer proposes (Q&A turns).
+        self.discovery_service = discovery_service
         self.session_store = session_store or JsonSessionStore(
             trajectory_store.root.parent / "sessions"
         )
@@ -96,6 +103,13 @@ class RecommendationAgentService:
 
         parsed = parse_agent_request(query, default_top_k=default_top_k)
         session = self.session_store.load_or_create(user_id, session_id)
+        if parsed.intent == "question":
+            return self._answer_question_turn(
+                user_id=user_id,
+                request=parsed,
+                session=session,
+                resolved_mode=resolved_mode,
+            )
         request = request_with_session_context(parsed, session)
         session_request = request
         plan = _initialized_loop_plan()
@@ -355,6 +369,127 @@ class RecommendationAgentService:
             fallback_reason=fallback_reason,
             agent_decisions=agent_decisions,
         )
+
+    def _answer_question_turn(
+        self,
+        *,
+        user_id: str,
+        request: AgentRequest,
+        session: AgentSession,
+        resolved_mode: str,
+    ) -> AgentResponse:
+        """Answer a conversational music question instead of recommending.
+
+        Uses the DeepSeek provider's chat path (with recent conversation
+        history for reference resolution). Falls back to a friendly nudge when
+        no model is configured or the call fails. Returns an AgentResponse with
+        an empty song list so the frontend renders it as a plain DJ reply.
+        """
+        provider_name: str | None = None
+        fallback_reason: str | None = None
+        answer: str | None = None
+        suggested_tracks: list[dict[str, str]] = []
+        use_model = (
+            resolved_mode in {"auto", "model"}
+            and self.llm_provider is not None
+            and hasattr(self.llm_provider, "answer_question")
+        )
+        if use_model:
+            provider_name = self.llm_provider.name
+            try:
+                answer, suggested_tracks = self.llm_provider.answer_question(
+                    request.query,
+                    history=[dict(item) for item in session.messages],
+                )
+            except Exception as error:  # noqa: BLE001 - degrade gracefully
+                fallback_reason = str(error)
+                answer = None
+        elif resolved_mode == "model":
+            fallback_reason = (
+                "model mode requested but no LLM provider is configured"
+            )
+
+        executed_mode = "model" if answer is not None else "rules"
+        message = answer or (
+            "这个问题我来聊聊——不过当前没有配置对话模型（DeepSeek），"
+            "暂时只能帮你推荐歌曲。配置 DEEPSEEK_API_KEY 后我就能回答这类"
+            "音乐问题啦。想听歌的话，直接说想要的风格或心情就行。"
+        )
+
+        # Ground the tracks the answer proposed so each becomes a real,
+        # playable card (drops anything the model hallucinated).
+        ranked_songs = self._ground_suggested_tracks(suggested_tracks)
+
+        session.turn_count += 1
+        session.current_intent = "question"
+        session.last_user_query = request.query
+        session.append_message("user", request.query)
+        session.append_message("dj", message)
+        self.session_store.save(session)
+
+        trajectory_id = str(uuid4())
+        return AgentResponse(
+            trajectory_id=trajectory_id,
+            session_id=session.session_id,
+            user_id=user_id,
+            query=request.query,
+            parsed_request=request,
+            message=message,
+            ranked_songs=ranked_songs,
+            seed_song_ids=[],
+            missing_seed_song_ids=[],
+            stop_reason="answered_question",
+            attempts=0,
+            tool_calls=[],
+            agent_mode=executed_mode,
+            provider=provider_name,
+            fallback_reason=fallback_reason,
+            agent_decisions=[
+                {
+                    "kind": "question_answer",
+                    "summary": (
+                        "answered a music question"
+                        + (
+                            f" and suggested {len(ranked_songs)} tracks"
+                            if ranked_songs
+                            else ""
+                        )
+                    ),
+                }
+            ],
+        )
+
+    def _ground_suggested_tracks(
+        self,
+        suggested_tracks: list[dict[str, str]],
+    ) -> list[dict[str, Any]]:
+        """Confirm chat-proposed tracks exist and shape them as ranked songs."""
+        if not suggested_tracks or self.discovery_service is None:
+            return []
+        candidates = [
+            GeneratedCandidate(
+                title=str(item.get("title") or "").strip(),
+                artist=str(item.get("artist") or "").strip(),
+                reason=str(item.get("reason") or "").strip(),
+            )
+            for item in suggested_tracks
+            if str(item.get("title") or "").strip()
+            and str(item.get("artist") or "").strip()
+        ]
+        if not candidates:
+            return []
+        try:
+            result = self.discovery_service.ground_candidates(
+                candidates,
+                intent="question_followup",
+                count=len(candidates),
+            )
+        except Exception:  # noqa: BLE001 - grounding is best-effort
+            return []
+        return [
+            discovered_track_to_ranked_song(track, index)
+            for index, track in enumerate(result.tracks, start=1)
+        ]
 
     def _validate_model_tool_arguments(
         self,

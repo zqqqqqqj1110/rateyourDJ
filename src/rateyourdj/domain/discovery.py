@@ -164,12 +164,38 @@ class DiscoveryService:
                 diagnostics=[f"generator {self.generator.name} failed: {error}"],
             )
 
+        return self.ground_candidates(
+            candidates,
+            intent=intent,
+            count=count,
+            exclude_artists=exclude_artists,
+            diagnostics=diagnostics,
+        )
+
+    def ground_candidates(
+        self,
+        candidates: list[GeneratedCandidate],
+        *,
+        intent: str = "",
+        count: int = 10,
+        exclude_artists: list[str] | None = None,
+        diagnostics: list[str] | None = None,
+    ) -> DiscoveryResult:
+        """Ground an explicit candidate list (skip generation).
+
+        Used when candidates already exist — e.g. songs the chat answer
+        proposed — so they pass through the same provider confirmation,
+        deduplication and hallucination-dropping as generated candidates.
+        """
+        if count < 1:
+            raise ValueError("count must be >= 1")
+        excluded = _normalized_set(exclude_artists or [])
+        diagnostics = list(diagnostics or [])
+
         candidates = _dedupe_candidates(candidates)
         generated = len(candidates)
         if generated == 0:
-            diagnostics.append(
-                f"generator {self.generator.name} returned no candidates"
-            )
+            diagnostics.append("no candidates to ground")
 
         grounded_tracks: list[DiscoveredTrack] = []
         dropped_candidates: list[dict[str, Any]] = []
@@ -191,7 +217,6 @@ class DiscoveryService:
                     )
                 )
             except (ProviderError, ValueError, LookupError) as error:
-                # Could not confirm the song exists -> treat as a hallucination.
                 dropped_candidates.append(
                     {
                         **candidate.to_dict(),
@@ -211,7 +236,10 @@ class DiscoveryService:
                 continue
 
             track_id = (track.track_id or "").strip()
-            dedupe_key = track_id or f"{_normalize(track.artist)}::{_normalize(track.title)}"
+            dedupe_key = (
+                track_id
+                or f"{_normalize(track.artist)}::{_normalize(track.title)}"
+            )
             if dedupe_key in seen_track_ids:
                 dropped_candidates.append(
                     {**candidate.to_dict(), "drop_reason": "duplicate"}
