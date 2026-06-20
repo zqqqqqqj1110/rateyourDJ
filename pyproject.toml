@@ -11,6 +11,14 @@ dependencies = ["Flask>=3.0,<4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+training = [
+    "torch>=2.2",
+    "transformers>=4.44",
+    "trl>=0.11",
+    "peft>=0.12",
+    "datasets>=2.20",
+    "accelerate>=0.33",
+]
 
 [project.scripts]
 rateyourdj-l1 = "rateyourdj.l1.cli:main"
@@ -20,6 +28,7 @@ rateyourdj-l4 = "rateyourdj.l4.cli:main"
 rateyourdj-l5 = "rateyourdj.l5.cli:main"
 rateyourdj-l6 = "rateyourdj.l6.cli:main"
 rateyourdj-l7 = "rateyourdj.l7.cli:main"
+rateyourdj-train = "rateyourdj.training.cli:main"
 rateyourdj-web = "rateyourdj.web.app:main"
 rateyourdj-collect = "rateyourdj.collectors.cli:main"
 
