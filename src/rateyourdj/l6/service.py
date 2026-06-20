@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
@@ -97,6 +98,7 @@ class RecommendationAgentService:
     ) -> AgentResponse:
         if max_steps < 2 or max_steps > 10:
             raise ValueError("max_steps must be between 2 and 10")
+        started_at = perf_counter()
         resolved_mode = agent_mode or self.agent_mode
         if resolved_mode not in {"auto", "model", "rules"}:
             raise ValueError("agent_mode must be auto, model, or rules")
@@ -109,6 +111,7 @@ class RecommendationAgentService:
                 request=parsed,
                 session=session,
                 resolved_mode=resolved_mode,
+                started_at=started_at,
             )
         request = request_with_session_context(parsed, session)
         session_request = request
@@ -312,6 +315,7 @@ class RecommendationAgentService:
             ],
         )
 
+        latency_ms = round((perf_counter() - started_at) * 1000, 3)
         trajectory = AgentTrajectory(
             trajectory_id=trajectory_id,
             session_id=session.session_id,
@@ -327,6 +331,7 @@ class RecommendationAgentService:
             agent_mode=executed_mode,
             provider=provider_name,
             fallback_reason=fallback_reason,
+            latency_ms=latency_ms,
             agent_decisions=agent_decisions,
             trajectory_schema_version=TRAJECTORY_SCHEMA_VERSION,
             loop_contract_version=LOOP_CONTRACT_VERSION,
@@ -367,6 +372,7 @@ class RecommendationAgentService:
             agent_mode=executed_mode,
             provider=provider_name,
             fallback_reason=fallback_reason,
+            latency_ms=latency_ms,
             agent_decisions=agent_decisions,
         )
 
@@ -377,6 +383,7 @@ class RecommendationAgentService:
         request: AgentRequest,
         session: AgentSession,
         resolved_mode: str,
+        started_at: float | None = None,
     ) -> AgentResponse:
         """Answer a conversational music question instead of recommending.
 
@@ -428,6 +435,11 @@ class RecommendationAgentService:
         self.session_store.save(session)
 
         trajectory_id = str(uuid4())
+        latency_ms = (
+            round((perf_counter() - started_at) * 1000, 3)
+            if started_at is not None
+            else None
+        )
         return AgentResponse(
             trajectory_id=trajectory_id,
             session_id=session.session_id,
@@ -444,6 +456,7 @@ class RecommendationAgentService:
             agent_mode=executed_mode,
             provider=provider_name,
             fallback_reason=fallback_reason,
+            latency_ms=latency_ms,
             agent_decisions=[
                 {
                     "kind": "question_answer",

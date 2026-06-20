@@ -130,6 +130,11 @@ class TrajectoryDatasetService:
         recommendation_count = sum(
             len(trajectory.recommendations) for trajectory in trajectories
         )
+        latencies = [
+            float(trajectory.latency_ms)
+            for trajectory in trajectories
+            if _is_number(trajectory.latency_ms)
+        ]
         unique_artist_count = sum(
             len(
                 {
@@ -206,6 +211,9 @@ class TrajectoryDatasetService:
                 unique_artist_count,
                 recommendation_count,
             ),
+            average_latency_ms=_average(latencies),
+            p95_latency_ms=_percentile(latencies, 95),
+            latency_sample_count=len(latencies),
             stop_reason_counts=dict(sorted(stop_reasons.items())),
             agent_mode_counts=dict(sorted(agent_modes.items())),
             feedback_type_counts=dict(sorted(feedback_types.items())),
@@ -594,6 +602,17 @@ def _average(values: Iterable[float | int]) -> float:
     if not items:
         return 0.0
     return round(sum(items) / len(items), 6)
+
+
+def _percentile(values: Iterable[float | int], percentile: float) -> float:
+    """Nearest-rank percentile (e.g. p95 latency). 0.0 when there is no data."""
+    items = sorted(float(value) for value in values)
+    if not items:
+        return 0.0
+    if len(items) == 1:
+        return round(items[0], 6)
+    rank = max(1, math.ceil(percentile / 100 * len(items)))
+    return round(items[min(rank, len(items)) - 1], 6)
 
 
 def _ratio(numerator: int, denominator: int) -> float:

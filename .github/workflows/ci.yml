@@ -1,0 +1,48 @@
+name: CI
+
+# Continuous integration for rateyourDJ.
+# Three gates run on every push and pull request:
+#   1. unit tests (the non-web suite is the real baseline; Flask is optional)
+#   2. the fixed eval-suite regression (agent behavior correctness)
+#   3. the trajectory-quality gate (grounding hallucination rate + ReAct
+#      thought coverage) over any committed sample trajectories
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package (with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Unit tests
+        run: |
+          PYTHONPATH=src python -m pytest tests -q
+
+      - name: Eval-suite regression (agent behavior)
+        run: |
+          PYTHONPATH=src python -m rateyourdj.l7.cli run-eval-suite
+
+      - name: Trajectory-quality gate (grounding + ReAct)
+        # Only enforce when sample trajectories are committed under data/.
+        # Skips cleanly (no failure) when there are none yet.
+        run: |
+          if compgen -G "data/trajectories/*/*.json" > /dev/null; then
+            PYTHONPATH=src python -m rateyourdj.l7.cli \
+              --trajectory-dir data/trajectories \
+              trajectory-quality --gate
+          else
+            echo "no sample trajectories committed; skipping quality gate"
+          fi

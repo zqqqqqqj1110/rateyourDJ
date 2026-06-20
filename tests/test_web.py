@@ -80,8 +80,10 @@ class WebAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"rateyourDJ", response.data)
-        self.assertIn(b'id="recommendations"', response.data)
-        self.assertIn(b'id="agent-debug-panel"', response.data)
+        # New conversational frontend: chat stream + composer + collection drawer.
+        self.assertIn(b'id="chat-stream"', response.data)
+        self.assertIn(b'id="composer"', response.data)
+        self.assertIn(b'id="collection-drawer"', response.data)
 
     def test_profile_and_recommendation_endpoints(self) -> None:
         profile = self.client.get("/api/profile/user-1")

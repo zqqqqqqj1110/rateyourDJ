@@ -81,6 +81,9 @@ class EvaluationReport:
     skip_rate: float
     favorite_rate: float
     artist_diversity: float
+    average_latency_ms: float
+    p95_latency_ms: float
+    latency_sample_count: int
     stop_reason_counts: dict[str, int]
     agent_mode_counts: dict[str, int]
     feedback_type_counts: dict[str, int]
@@ -104,6 +107,9 @@ class EvaluationReport:
             "skip_rate": self.skip_rate,
             "favorite_rate": self.favorite_rate,
             "artist_diversity": self.artist_diversity,
+            "average_latency_ms": self.average_latency_ms,
+            "p95_latency_ms": self.p95_latency_ms,
+            "latency_sample_count": self.latency_sample_count,
             "stop_reason_counts": dict(self.stop_reason_counts),
             "agent_mode_counts": dict(self.agent_mode_counts),
             "feedback_type_counts": dict(self.feedback_type_counts),
@@ -186,6 +192,122 @@ class RankingTuningReport:
             "negative_rate_by_rank": dict(self.negative_rate_by_rank),
             "reward_by_score_bucket": dict(self.reward_by_score_bucket),
             "feedback_count_by_source": dict(self.feedback_count_by_source),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ABVariantMetrics:
+    """Aggregated metrics for one variant (arm) of an offline A/B comparison."""
+
+    label: str
+    query_count: int
+    average_recommendations: float
+    non_empty_rate: float
+    tool_call_success_rate: float
+    grounding_rate: float
+    average_hallucination_rate: float
+    thought_coverage_rate: float
+    average_latency_ms: float
+    p95_latency_ms: float
+    fallback_rate: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "query_count": self.query_count,
+            "average_recommendations": self.average_recommendations,
+            "non_empty_rate": self.non_empty_rate,
+            "tool_call_success_rate": self.tool_call_success_rate,
+            "grounding_rate": self.grounding_rate,
+            "average_hallucination_rate": self.average_hallucination_rate,
+            "thought_coverage_rate": self.thought_coverage_rate,
+            "average_latency_ms": self.average_latency_ms,
+            "p95_latency_ms": self.p95_latency_ms,
+            "fallback_rate": self.fallback_rate,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ABComparisonReport:
+    """Side-by-side offline comparison of two agent configurations."""
+
+    comparison: str
+    query_count: int
+    variant_a: ABVariantMetrics
+    variant_b: ABVariantMetrics
+    deltas: dict[str, float]
+    notes: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "comparison": self.comparison,
+            "query_count": self.query_count,
+            "variant_a": self.variant_a.to_dict(),
+            "variant_b": self.variant_b.to_dict(),
+            "deltas": dict(self.deltas),
+            "notes": list(self.notes),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectoryQualityReport:
+    """Grounding-quality and ReAct-trace-quality metrics over trajectories."""
+
+    trajectory_count: int
+    # grounding (hallucination) quality
+    discovery_trajectory_count: int
+    discovery_coverage_rate: float
+    total_generated: int
+    total_grounded: int
+    total_dropped: int
+    average_hallucination_rate: float
+    grounding_rate: float
+    # ReAct trace quality
+    model_decision_count: int
+    decisions_with_thought: int
+    thought_coverage_rate: float
+    average_thoughts_per_trajectory: float
+    average_thought_length: float
+    model_decisions_missing_thought: int
+    skipped_files: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "trajectory_count": self.trajectory_count,
+            "discovery_trajectory_count": self.discovery_trajectory_count,
+            "discovery_coverage_rate": self.discovery_coverage_rate,
+            "total_generated": self.total_generated,
+            "total_grounded": self.total_grounded,
+            "total_dropped": self.total_dropped,
+            "average_hallucination_rate": self.average_hallucination_rate,
+            "grounding_rate": self.grounding_rate,
+            "model_decision_count": self.model_decision_count,
+            "decisions_with_thought": self.decisions_with_thought,
+            "thought_coverage_rate": self.thought_coverage_rate,
+            "average_thoughts_per_trajectory": (
+                self.average_thoughts_per_trajectory
+            ),
+            "average_thought_length": self.average_thought_length,
+            "model_decisions_missing_thought": (
+                self.model_decisions_missing_thought
+            ),
+            "skipped_files": list(self.skipped_files),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class QualityGateResult:
+    """Pass/fail outcome of checking quality metrics against thresholds."""
+
+    passed: bool
+    failures: list[str]
+    checked: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "failures": list(self.failures),
+            "checked": dict(self.checked),
         }
 
 

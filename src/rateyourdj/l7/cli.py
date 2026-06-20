@@ -11,10 +11,57 @@ from .models import l7_schema
 from .eval_runner import RecommendationEvalSuite
 from .service import TrajectoryDatasetService
 from .synthetic import SyntheticTrajectoryGenerator
+from .trajectory_quality import check_quality_gate, load_trajectory_quality
+from .ab_compare import ABVariant, run_ab_comparison
 
 
 def _print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _run_default_ab_comparison(queries: list[str] | None) -> Any:
+    """Default offline A/B: rules-only vs model(ReAct) with a mock model.
+
+    Uses a MockLLMProvider that immediately finishes, so the model arm exercises
+    the agent loop (program-first discovery + ReAct decision recording) without
+    any API key or network. Both arms share the same seeded rock profile.
+    """
+    from rateyourdj.l6 import MockLLMProvider
+    from rateyourdj.l6.provider import AgentDecision
+
+    resolved_queries = queries or [
+        "推荐一些英伦摇滚",
+        "再来一些摇滚",
+        "想要一些有吉他感的歌",
+    ]
+
+    def _mock_llm() -> Any:
+        # One finish decision per query is enough; the program runs ranking
+        # before consulting the model in rules-style seeded environments.
+        return MockLLMProvider(
+            [
+                AgentDecision(
+                    kind="finish",
+                    summary="finish after seeded ranking",
+                    thought="seed collection already yields enough candidates",
+                )
+                for _ in range(len(resolved_queries) * 4)
+            ]
+        )
+
+    variant_a = ABVariant(label="rules", agent_mode="rules", seed_profile=True)
+    variant_b = ABVariant(
+        label="model",
+        agent_mode="model",
+        seed_profile=True,
+        llm_provider_factory=_mock_llm,
+    )
+    return run_ab_comparison(
+        resolved_queries,
+        variant_a,
+        variant_b,
+        comparison="rules-only vs model(ReAct)",
+    )
 
 
 def _print_eval_suite_summary(report: Any) -> None:
@@ -161,6 +208,37 @@ def build_parser() -> argparse.ArgumentParser:
         "--anonymization-salt",
         default=os.getenv("RATEYOURDJ_EXPORT_SALT", ""),
     )
+
+    quality = subparsers.add_parser(
+        "trajectory-quality",
+        help=(
+            "aggregate grounding (hallucination) and ReAct trace quality "
+            "metrics; optionally enforce CI thresholds with --gate"
+        ),
+    )
+    quality.add_argument(
+        "--gate",
+        action="store_true",
+        help="exit non-zero when metrics breach the quality thresholds",
+    )
+    quality.add_argument("--max-hallucination-rate", type=float, default=0.5)
+    quality.add_argument("--min-grounding-rate", type=float, default=0.3)
+    quality.add_argument("--min-thought-coverage-rate", type=float, default=0.9)
+    quality.add_argument("--max-missing-thought", type=int, default=0)
+
+    ab = subparsers.add_parser(
+        "ab-compare",
+        help=(
+            "offline A/B comparison of two agent configs on a shared query "
+            "batch (default: rules-only vs model/ReAct, runs without API keys)"
+        ),
+    )
+    ab.add_argument(
+        "--query",
+        action="append",
+        dest="queries",
+        help="a query to run under both variants; may be repeated",
+    )
     return parser
 
 
@@ -178,6 +256,10 @@ def main() -> int:
             feedback_rate=args.feedback_rate,
         )
         _print_json(result.to_dict())
+        return 0
+    if args.command == "ab-compare":
+        report = _run_default_ab_comparison(args.queries)
+        _print_json(report.to_dict())
         return 0
     if args.command == "run-eval-suite":
         report = RecommendationEvalSuite().run(case_ids=args.case_ids)
@@ -199,6 +281,26 @@ def main() -> int:
         test_result = _run_regression_tests(verbosity=args.test_verbosity)
         return 0 if test_result.wasSuccessful() else 1
     service = TrajectoryDatasetService(args.trajectory_dir)
+    if args.command == "trajectory-quality":
+        report = load_trajectory_quality(args.trajectory_dir)
+        if args.gate:
+            gate = check_quality_gate(
+                report,
+                max_hallucination_rate=args.max_hallucination_rate,
+                min_grounding_rate=args.min_grounding_rate,
+                min_thought_coverage_rate=args.min_thought_coverage_rate,
+                max_missing_thought=args.max_missing_thought,
+            )
+            _print_json(
+                {"metrics": report.to_dict(), "gate": gate.to_dict()}
+            )
+            if not gate.passed:
+                print("[trajectory-quality] gate: FAIL")
+                return 1
+            print("[trajectory-quality] gate: PASS")
+            return 0
+        _print_json(report.to_dict())
+        return 0
     if args.command == "analyze-ranking":
         report = service.analyze_ranking_feedback(
             user_id=args.user_id,

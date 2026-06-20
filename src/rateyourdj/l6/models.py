@@ -59,6 +59,7 @@ class AgentResponse:
     agent_mode: str = "rules"
     provider: str | None = None
     fallback_reason: str | None = None
+    latency_ms: float | None = None
     agent_decisions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -78,6 +79,7 @@ class AgentResponse:
             "agent_mode": self.agent_mode,
             "provider": self.provider,
             "fallback_reason": self.fallback_reason,
+            "latency_ms": self.latency_ms,
             "agent_decisions": [
                 dict(decision) for decision in self.agent_decisions
             ],
@@ -101,6 +103,7 @@ class AgentTrajectory:
     agent_mode: str = "rules"
     provider: str | None = None
     fallback_reason: str | None = None
+    latency_ms: float | None = None
     agent_decisions: list[dict[str, Any]] = field(default_factory=list)
     trajectory_schema_version: str = TRAJECTORY_SCHEMA_VERSION
     loop_contract_version: str | None = None
@@ -137,6 +140,7 @@ class AgentTrajectory:
             "agent_mode": self.agent_mode,
             "provider": self.provider,
             "fallback_reason": self.fallback_reason,
+            "latency_ms": self.latency_ms,
             "agent_decisions": [
                 dict(decision) for decision in self.agent_decisions
             ],
@@ -185,6 +189,7 @@ class AgentTrajectory:
             "agent_mode",
             "provider",
             "fallback_reason",
+            "latency_ms",
             "agent_decisions",
             "trajectory_schema_version",
             "loop_contract_version",
@@ -239,6 +244,11 @@ class AgentTrajectory:
                 if value.get("fallback_reason") is not None
                 else None
             ),
+            latency_ms=(
+                float(value["latency_ms"])
+                if _is_number(value.get("latency_ms"))
+                else None
+            ),
             agent_decisions=[
                 dict(item) for item in value.get("agent_decisions", [])
             ],
@@ -290,6 +300,10 @@ class AgentTrajectory:
             ],
             created_at=str(value["created_at"]),
         )
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def agent_schema() -> dict[str, Any]:
