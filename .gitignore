@@ -13,3 +13,11 @@ data/trajectories/
 data/sessions/
 data/exports/
 data/synthetic/
+
+!.env.example
+.pytest_cache/
+data/*.jsonl
+data/training/
+data/raw/
+data/processed/
+data/index/
