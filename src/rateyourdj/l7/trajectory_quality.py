@@ -21,6 +21,14 @@ ReAct trace quality
     (decision_source != "model") are excluded — they legitimately have no model
     thought.
 
+V2 trace quality (TODO stage 0; replaces thought coverage as the default gate)
+    Hidden reasoning is no longer a training or quality target. Instead every
+    model decision must carry a well-formed *action* (tool -> tool_name,
+    update -> request_patch, finish), every decision (model or program) must
+    carry a user-auditable *decision summary*, and every recommended track
+    must carry *evidence*. Thought metrics are still reported, and can still
+    be gated explicitly, but are off by default.
+
 Both inputs accept either L7 dataset records (from `dataset_record`) or raw
 trajectory dicts (`AgentTrajectory.to_dict`), since both expose the same
 `tool_calls` / `agent_decisions` shape.
@@ -54,7 +62,30 @@ def compute_trajectory_quality(
     thought_lengths: list[int] = []
     thoughts_per_trajectory: list[int] = []
 
+    valid_actions = 0
+    decision_count = 0
+    decisions_with_summary = 0
+    recommendation_count = 0
+    recommendations_with_evidence = 0
+
     for record in records:
+        # --- V2 trace quality: summary on every decision, evidence on every rec ---
+        for decision in _as_list(record.get("agent_decisions")):
+            if not isinstance(decision, dict):
+                continue
+            decision_count += 1
+            if str(decision.get("summary") or "").strip():
+                decisions_with_summary += 1
+        recs = record.get("recommendations")
+        if recs is None:
+            recs = record.get("ranked_songs")
+        for rec in _as_list(recs):
+            if not isinstance(rec, dict):
+                continue
+            recommendation_count += 1
+            if rec.get("evidence"):
+                recommendations_with_evidence += 1
+
         # --- grounding quality (from discover_tracks observations) ---
         had_discovery = False
         for call in _as_list(record.get("tool_calls")):
@@ -82,6 +113,8 @@ def compute_trajectory_quality(
             if not _is_model_decision(decision):
                 continue
             model_decision_count += 1
+            if _has_valid_action(decision):
+                valid_actions += 1
             thought = str(decision.get("thought") or "").strip()
             if thought:
                 decisions_with_thought += 1
@@ -107,6 +140,14 @@ def compute_trajectory_quality(
             model_decision_count - decisions_with_thought
         ),
         skipped_files=list(skipped_files or []),
+        invalid_action_count=model_decision_count - valid_actions,
+        action_coverage_rate=_ratio(valid_actions, model_decision_count),
+        decision_count=decision_count,
+        decisions_with_summary=decisions_with_summary,
+        summary_coverage_rate=_ratio(decisions_with_summary, decision_count),
+        recommendation_count=recommendation_count,
+        recommendations_with_evidence=recommendations_with_evidence,
+        evidence_coverage_rate=_ratio(recommendations_with_evidence, recommendation_count),
     )
 
 
@@ -115,8 +156,11 @@ def check_quality_gate(
     *,
     max_hallucination_rate: float = 0.5,
     min_grounding_rate: float = 0.3,
-    min_thought_coverage_rate: float = 0.9,
-    max_missing_thought: int = 0,
+    min_thought_coverage_rate: float | None = None,
+    max_missing_thought: int | None = None,
+    max_invalid_actions: int = 0,
+    min_summary_coverage_rate: float = 0.95,
+    min_evidence_coverage_rate: float = 0.9,
 ) -> QualityGateResult:
     """Fail (for CI) when quality metrics breach thresholds.
 
@@ -140,15 +184,41 @@ def check_quality_gate(
             )
 
     if report.model_decision_count > 0:
+        checked["invalid_action_count"] = report.invalid_action_count
+        if report.invalid_action_count > max_invalid_actions:
+            failures.append(
+                f"invalid_action_count {report.invalid_action_count} "
+                f"> max {max_invalid_actions}"
+            )
+
+    if report.decision_count > 0:
+        checked["summary_coverage_rate"] = report.summary_coverage_rate
+        if report.summary_coverage_rate < min_summary_coverage_rate:
+            failures.append(
+                f"summary_coverage_rate {report.summary_coverage_rate} "
+                f"< min {min_summary_coverage_rate}"
+            )
+
+    if report.recommendation_count > 0:
+        checked["evidence_coverage_rate"] = report.evidence_coverage_rate
+        if report.evidence_coverage_rate < min_evidence_coverage_rate:
+            failures.append(
+                f"evidence_coverage_rate {report.evidence_coverage_rate} "
+                f"< min {min_evidence_coverage_rate}"
+            )
+
+    # Thought gating is opt-in since V2 (hidden reasoning is not a target).
+    if report.model_decision_count > 0 and min_thought_coverage_rate is not None:
         checked["thought_coverage_rate"] = report.thought_coverage_rate
-        checked["model_decisions_missing_thought"] = (
-            report.model_decisions_missing_thought
-        )
         if report.thought_coverage_rate < min_thought_coverage_rate:
             failures.append(
                 f"thought_coverage_rate {report.thought_coverage_rate} "
                 f"< min {min_thought_coverage_rate}"
             )
+    if report.model_decision_count > 0 and max_missing_thought is not None:
+        checked["model_decisions_missing_thought"] = (
+            report.model_decisions_missing_thought
+        )
         if report.model_decisions_missing_thought > max_missing_thought:
             failures.append(
                 f"model_decisions_missing_thought "
@@ -201,6 +271,15 @@ def _is_model_decision(decision: Any) -> bool:
     # Program-injected decisions use a "kind" like program_discovery_first /
     # program_finish / fallback; real model steps use tool/update/finish.
     return decision.get("kind") in {"tool", "update", "finish"}
+
+
+def _has_valid_action(decision: dict[str, Any]) -> bool:
+    kind = decision.get("kind")
+    if kind == "tool":
+        return bool(str(decision.get("tool_name") or "").strip())
+    if kind == "update":
+        return isinstance(decision.get("request_patch"), dict)
+    return kind == "finish"
 
 
 def _as_list(value: Any) -> list[Any]:

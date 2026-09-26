@@ -90,7 +90,7 @@ class QualityGateTests(unittest.TestCase):
         records = [
             _trajectory(
                 discovery=(10, 9, 1),
-                decisions=[{"kind": "finish", "thought": "all good"}],
+                decisions=[{"kind": "finish", "summary": "done", "thought": "all good"}],
             )
         ]
         report = compute_trajectory_quality(records)
@@ -110,6 +110,42 @@ class QualityGateTests(unittest.TestCase):
         gate = check_quality_gate(report, max_missing_thought=0)
         self.assertFalse(gate.passed)
         self.assertTrue(any("thought" in f for f in gate.failures))
+
+    def test_thought_is_not_gated_by_default(self) -> None:
+        decisions = [{"kind": "tool", "tool_name": "x", "summary": "search", "thought": ""}]
+        report = compute_trajectory_quality([_trajectory(decisions=decisions)])
+        gate = check_quality_gate(report)
+        self.assertTrue(gate.passed, gate.failures)
+        self.assertNotIn("thought_coverage_rate", gate.checked)
+
+    def test_gate_fails_invalid_action(self) -> None:
+        decisions = [{"kind": "tool", "tool_name": "", "summary": "?"}]
+        report = compute_trajectory_quality([_trajectory(decisions=decisions)])
+        self.assertEqual(report.invalid_action_count, 1)
+        gate = check_quality_gate(report)
+        self.assertFalse(gate.passed)
+        self.assertTrue(any("invalid_action" in f for f in gate.failures))
+
+    def test_gate_fails_missing_summary(self) -> None:
+        decisions = [{"kind": "finish"}, {"kind": "program_guard", "summary": "ok"}]
+        report = compute_trajectory_quality([_trajectory(decisions=decisions)])
+        self.assertEqual(report.decision_count, 2)
+        self.assertEqual(report.summary_coverage_rate, 0.5)
+        gate = check_quality_gate(report)
+        self.assertFalse(gate.passed)
+        self.assertTrue(any("summary" in f for f in gate.failures))
+
+    def test_gate_fails_missing_evidence(self) -> None:
+        record = _trajectory(decisions=[{"kind": "finish", "summary": "done"}])
+        record["recommendations"] = [
+            {"song_id": "s_1", "evidence": [{"type": "shared_tag", "detail": "x", "ref": "mb"}]},
+            {"song_id": "s_2", "evidence": []},
+        ]
+        report = compute_trajectory_quality([record])
+        self.assertEqual(report.evidence_coverage_rate, 0.5)
+        gate = check_quality_gate(report)
+        self.assertFalse(gate.passed)
+        self.assertTrue(any("evidence" in f for f in gate.failures))
 
     def test_empty_dataset_passes_vacuously(self) -> None:
         report = compute_trajectory_quality([])

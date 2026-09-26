@@ -11,6 +11,8 @@ collection: tracks the user explicitly saved
 
 Local storage should no longer be treated as the only recommendation candidate database.
 
+> **长尾推荐重构（2026-09）**：新的 V2 数据契约见文末“V2 契约：长尾推荐重构”一节，新代码以该节为准。
+
 ## Target Data Layout
 
 ```text
@@ -454,3 +456,334 @@ Recommended order:
 4. Update `/api/v1/agent/recommend` to return the new response shape.
 5. Move feedback writes to append-only feedback events.
 6. Stop relying on `data/song_profiles` as the only candidate source.
+
+---
+
+# V2 契约：长尾推荐重构
+
+> 本节是 TODO.md 阶段 0 的产物，定义阶段 1–6 共享的数据格式。以上 1–8 节是 v1 设计，迁移期间继续可读；新代码以本节为准。
+> 所有 V2 记录都带 `schema_version`，格式为 `<名称>/v2`。
+
+## 9.0 数据流与目录
+
+```text
+MusicBrainz + ListenBrainz ──> catalog/processed/songs.jsonl (SongProfileV2)
+                                        │
+UserContextV2 + 文本请求 ──> 多路召回 ──> RetrievalCandidateV2[]
+                                        │
+                        排序 / 模型选择（只能在候选集内）
+                                        │
+                           ImpressionV2（曝光） ──> FeedbackV2（反馈）
+                                        │
+                     SFT / GRPO 样本（训练） + runs/<run_id>/manifest.json
+```
+
+```text
+data/
+  users/<user_id>/
+    context.json            UserContextV2
+    impressions.jsonl       ImpressionV2（追加写）
+    feedback.jsonl          FeedbackV2（追加写）
+  catalog/
+    raw/                    MusicBrainz / ListenBrainz 原始下载（不进 Git）
+    processed/songs.jsonl   SongProfileV2，一行一首
+    manifest.json           曲库版本、来源、下载日期、许可
+  index/<index_version>/    向量索引与其 manifest（不进 Git）
+  training/
+    sft/{train,val,test}.jsonl
+    grpo/{train,val,test}.jsonl
+runs/<run_id>/manifest.json 每次实验的 run manifest（见 9.10）
+```
+
+`data/users/`、`data/catalog/`、`data/index/`、`data/training/` 全部不进 Git；需要复现时由脚本重新生成。
+
+## 9.1 ID 规则
+
+- **内部 song ID**：`s_` + 16 位十六进制，只含 `[A-Za-z0-9_.-]`，可直接当文件名。
+  - 有 MusicBrainz recording MBID 时：`s_` + `sha1("mb:" + recording_mbid)[:16]`；
+  - 没有 MBID 时：`s_` + `sha1("na:" + 规范化艺人 + "|" + 规范化歌名)[:16]`，并标记 `id_basis: "name"`，以后拿到 MBID 再迁移。
+- **外部 ID** 只放在 `external_ids` 里，绝不当文件名或主键：`musicbrainz_recording`、`musicbrainz_artists[]`、`isrc[]`、`spotify_track`、`youtube_video`。
+- 旧数据里的 `spotify:track:...` 这类带冒号的 ID 迁移时放进 `external_ids.spotify_track`，重新生成内部 ID（见 9.11）。
+- 用户 ID 沿用 `[A-Za-z0-9_.-]+`，第一阶段只有 `participant_001`。
+
+## 9.2 UserContextV2
+
+轻量用户上下文，不再维护手工的重型画像。偏好（流派、艺人、标签）按需从种子和反馈算出来，不存。
+
+```json
+{
+  "schema_version": "user-context/v2",
+  "user_id": "participant_001",
+  "seed_branches": [
+    {
+      "branch_id": "pink_floyd",
+      "label": "迷幻 / 前卫 / 艺术摇滚 / 氛围化",
+      "seed_song_ids": ["s_1a2b3c4d5e6f7a8b"],
+      "seed_artists_mbid": ["83d91898-7763-47d7-b03b-b92132375c47"]
+    },
+    {
+      "branch_id": "oasis",
+      "label": "Britpop / 另类摇滚 / 旋律型吉他摇滚",
+      "seed_song_ids": ["s_9f8e7d6c5b4a3210"],
+      "seed_artists_mbid": ["39ab1aed-75e0-4140-bd47-540276886b60"]
+    }
+  ],
+  "exploration_level": 0.5,
+  "exclusions": {"song_ids": [], "artists_mbid": [], "tags": []},
+  "heard_song_ids": [],
+  "recommended_song_ids": [],
+  "recent_feedback_ids": [],
+  "created_at": "2026-09-26T00:00:00Z",
+  "updated_at": "2026-09-26T00:00:00Z"
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `seed_branches` | 每条兴趣分支独立保存，不合并成“英伦摇滚”；算法不得硬编码分支名 |
+| `exploration_level` | 0–1，0 = 只要熟悉相关，1 = 尽量探索 |
+| `heard_song_ids` | 用户明确听过的歌（来自反馈里的 `heard_before`） |
+| `recommended_song_ids` | 曾经曝光过的歌，用于去重 |
+| `recent_feedback_ids` | 最近 N 条反馈的引用，原始记录在 `feedback.jsonl` |
+
+## 9.3 SongProfileV2
+
+```json
+{
+  "schema_version": "song-profile/v2",
+  "song_id": "s_1a2b3c4d5e6f7a8b",
+  "id_basis": "mbid",
+  "title": "Time",
+  "artists": [{"name": "Pink Floyd", "mbid": "83d91898-7763-47d7-b03b-b92132375c47"}],
+  "release": {"title": "The Dark Side of the Moon", "year": 1973, "country": "GB"},
+  "duration_ms": 413000,
+  "external_ids": {
+    "musicbrainz_recording": "…",
+    "isrc": ["…"],
+    "spotify_track": "…",
+    "youtube_video": null
+  },
+  "tags": [{"name": "progressive rock", "weight": 0.92, "source": "musicbrainz"}],
+  "genres": ["progressive rock", "psychedelic rock"],
+  "popularity": {
+    "listen_count": 1234567,
+    "listener_count": 45678,
+    "source": "listenbrainz",
+    "global_percentile": 0.998,
+    "genre_percentile": {"progressive rock": 0.999},
+    "bucket": "head",
+    "bucket_version": "bucket-v1",
+    "computed_at": "2026-09-27T00:00:00Z"
+  },
+  "playback": {
+    "source": "spotify",
+    "url": "https://open.spotify.com/track/…",
+    "verified": true,
+    "verification_method": "spotify_api",
+    "verified_at": "2026-09-27T00:00:00Z"
+  },
+  "rag_doc_id": "doc_s_1a2b3c4d5e6f7a8b",
+  "provenance": [
+    {"source": "musicbrainz", "license": "CC0", "fetched_at": "2026-09-27T00:00:00Z"},
+    {"source": "listenbrainz", "license": "CC0", "fetched_at": "2026-09-27T00:00:00Z"}
+  ]
+}
+```
+
+**冷门程度分档（`bucket-v1`）**
+
+- 按 ListenBrainz `listen_count` 从高到低排，计算全局百分位 `global_percentile`（1.0 = 最热）；
+- `head`：前 10%；`mid`：10%–50%；`tail`：其余 50%；
+- 没有 ListenBrainz 数据的歌记为 `unknown`，不算进长尾指标，单独报告数量；
+- 阈值属于 `bucket-v1`，改阈值必须升版本号，旧结果不重算。
+
+**播放来源规则**
+
+| bucket | 首选 | 备选 |
+|---|---|---|
+| head / mid | Spotify（有 `spotify_track`） | 已校验的 YouTube |
+| tail | 已校验的 YouTube | 无 |
+| 任何 | 校验失败 → `source: "none"`，前端显示“暂无可播放链接”，不凑数 |
+
+YouTube 链接由 LLM API 联网搜索得到，必须用 YouTube oEmbed 或 Data API 确认视频存在，而且标题包含歌名、频道或标题包含艺人名，才能 `verified: true`。
+
+## 9.4 RetrievalCandidateV2
+
+召回阶段的输出。排序和模型选择只能从这里选歌。
+
+```json
+{
+  "schema_version": "retrieval-candidate/v2",
+  "request_id": "req_…",
+  "candidate_set_id": "cs_…",
+  "song_id": "s_…",
+  "bucket": "tail",
+  "channels": [
+    {"channel": "semantic", "rank": 3, "raw_score": 0.71},
+    {"channel": "tail", "rank": 1, "raw_score": 0.64}
+  ],
+  "fused_score": 0.68,
+  "relevance": 0.66,
+  "tail_score": 0.85,
+  "evidence": [
+    {"type": "seed_similarity", "detail": "与种子 Time 的 embedding 相似度 0.71", "ref": "s_1a2b3c4d5e6f7a8b"},
+    {"type": "shared_tag", "detail": "progressive rock", "ref": "musicbrainz"}
+  ],
+  "index_version": "idx-…",
+  "branch_affinity": {"pink_floyd": 0.74, "oasis": 0.12}
+}
+```
+
+- `channel` 取值：`rule`（原标签召回）、`semantic`（文本语义）、`tail`（长尾专用）、`explore`（探索）；
+- `evidence` 每条都必须能回溯到曲库事实或种子歌，不能是模型自己编的；
+- 同一 `candidate_set_id` 固定后可复现（用于离线评估和训练样本）。
+
+## 9.5 ImpressionV2（曝光）
+
+每首展示给用户的歌写一条。**没有曝光记录的歌不能成为负反馈。**
+
+```json
+{
+  "schema_version": "impression/v2",
+  "impression_id": "imp_…",
+  "user_id": "participant_001",
+  "run_id": "run_…",
+  "request_id": "req_…",
+  "candidate_set_id": "cs_…",
+  "song_id": "s_…",
+  "rank": 4,
+  "bucket": "tail",
+  "channel": "tail",
+  "strategy_version": "rag-tailmix-v1",
+  "model_version": null,
+  "interleaving": {"pair_id": "pair_…", "arm": "B", "arms": {"A": "rag-rel-v1", "B": "rag-tailmix-v1"}},
+  "playback_source": "youtube",
+  "shown_at": "2026-10-01T10:00:00Z"
+}
+```
+
+- `strategy_version` 例：`legacy-deepseek-v0`（旧路径，只在 baseline 里出现）、`rag-rel-v1`、`rag-tailmix-v1`、`sft-lora-v1`、`grpo-v1`；
+- `interleaving` 只在两两交错对比时出现：同一请求混排两个策略的结果，`arm` 标记这首歌来自哪个策略，反馈据此归因。
+
+## 9.6 FeedbackV2（反馈）
+
+```json
+{
+  "schema_version": "feedback/v2",
+  "feedback_id": "fb_…",
+  "impression_id": "imp_…",
+  "user_id": "participant_001",
+  "song_id": "s_…",
+  "events": [
+    {"type": "play_start", "at": "2026-10-01T10:00:05Z"},
+    {"type": "play_progress", "seconds": 142, "fraction": 0.61, "at": "2026-10-01T10:02:27Z"},
+    {"type": "liked", "at": "2026-10-01T10:02:30Z"}
+  ],
+  "survey": {
+    "heard_before": "no",
+    "relevance": 4,
+    "discovery_value": 5,
+    "too_unfamiliar": false,
+    "would_save": true,
+    "reject_reason": null
+  },
+  "phase": "dev",
+  "created_at": "2026-10-01T10:02:40Z"
+}
+```
+
+- `events.type`：`play_start`、`play_progress`、`completed`、`quick_skip`（30 秒内跳过）、`liked`、`saved`、`hide`；
+- `survey.heard_before`：`yes` / `no` / `unsure`；`relevance`、`discovery_value`：1–5；
+- `reject_reason`：`dislike_song`（不喜欢这首）/ `not_in_mood_to_explore`（当前不想探索）/ `other`，两者必须区分；
+- `phase`：`dev`（开发轮次，可以用来检查 reward 是否合理）或 `final`（最终 case study，**永远不进任何训练或调参**）。
+
+## 9.7 SFT 样本
+
+Chat / tool-call 格式，**不包含隐藏思维过程**（没有 `thought` 字段）。
+
+```json
+{
+  "schema_version": "sft-sample/v2",
+  "sample_id": "sft_…",
+  "messages": [
+    {"role": "system", "content": "你是 rateyourDJ……只能从候选集中选歌……"},
+    {"role": "user", "content": "来点像 Wish You Were Here 但更冷门的"},
+    {"role": "assistant", "tool_calls": [{"name": "retrieve_candidates", "arguments": {"branch_hint": "pink_floyd", "exploration_level": 0.7}}]},
+    {"role": "tool", "name": "retrieve_candidates", "content": "{…RetrievalCandidateV2 列表…}"},
+    {"role": "assistant", "content": "{\"picks\": [{\"song_id\": \"s_…\", \"reason\": \"…\", \"evidence_refs\": [0, 1]}]}"}
+  ],
+  "meta": {
+    "scenario": "branch_pink_floyd_tail",
+    "branch": "pink_floyd",
+    "exploration_level": 0.7,
+    "candidate_set_id": "cs_…",
+    "oracle_version": "oracle-v1",
+    "split": "train"
+  }
+}
+```
+
+## 9.8 GRPO 样本
+
+```json
+{
+  "schema_version": "grpo-sample/v2",
+  "sample_id": "grpo_…",
+  "prompt": [{"role": "system", "content": "…"}, {"role": "user", "content": "…"}],
+  "candidates": ["…20–30 条 RetrievalCandidateV2…"],
+  "constraints": {"count": 5, "max_per_artist": 1, "exclude_song_ids": [], "min_tail": 1},
+  "reward_spec_version": "reward-v1",
+  "meta": {"scenario": "…", "branch": "oasis", "exploration_level": 0.3, "split": "train"},
+  "eval_only": {
+    "hidden_positives": ["s_…"],
+    "source": "listenbrainz_similar_users",
+    "similar_user_ids": ["lb_user_hash_…"]
+  }
+}
+```
+
+- prompt 里不含唯一标准答案；
+- **`eval_only` 严格不进 reward**：训练数据加载器必须在读入时删掉整个 `eval_only` 字段，由测试强制检查；它只用于验证集、测试集和 checkpoint 选择；
+- `hidden_positives` 来自 ListenBrainz / MSD 中与 `participant_001` 口味相近用户的真实收听日志；用户 ID 只存哈希。
+
+## 9.9 数据集划分
+
+- train / val / test 按 **场景 + 艺人** 隔离：测试集里的种子艺人和目标艺人不出现在训练集；
+- 按 `candidate_set_id` 固定候选集，同一候选集只属于一个 split；
+- 固定 seed，划分结果写入 `data/training/<kind>/split_manifest.json`；
+- `phase: "final"` 的反馈永远不进任何 split；
+- 冻结测试集后不再修改，改动只能新建版本。
+
+## 9.10 Run manifest
+
+每次 baseline、评估、训练、消融都在 `runs/<run_id>/manifest.json` 写一份（实现：`src/rateyourdj/experiment.py`）：
+
+```json
+{
+  "schema_version": "run-manifest/v1",
+  "run_id": "baseline-v0",
+  "kind": "baseline",
+  "created_at": "2026-09-26T13:00:00+00:00",
+  "git": {"commit": "520e7d1…", "dirty": false},
+  "environment": {"python": "3.12.4", "platform": "macOS-…"},
+  "data": {"eval/queries_v1.jsonl": "<sha256>"},
+  "model": {"provider": "deepseek", "name": "deepseek-chat", "adapter": null},
+  "seed": null,
+  "config": {"…": "…"},
+  "metrics": {"…": "…"},
+  "notes": ""
+}
+```
+
+`runs/**/raw/` 不进 Git，manifest 和汇总结果可以提交。
+
+## 9.11 从 v1 迁移
+
+| v1 数据 | V2 数据 | 规则 |
+|---|---|---|
+| `data/user_profiles/<id>.json` | `data/users/<id>/context.json` | `collection_song_ids` → 候选种子（需人工确认后才写入 `seed_branches`）；偏好权重不迁移，按需重算 |
+| `data/song_profiles/*.json` | `catalog/processed/songs.jsonl` | 重新生成内部 ID；原 ID 放进 `external_ids`；`popularity.bucket` 先记 `unknown`，拿到 ListenBrainz 数据后再算 |
+| `data/trajectories/**` | 不迁移 | 只读保留，作为 `legacy-deepseek-v0` 的历史记录 |
+| `data/sft.jsonl`、`grpo.jsonl`、`dataset.jsonl` | 废弃 | 不迁移，新训练数据从头生成 |
+
+旧 JSON 必须仍能被读取：V2 读取器遇到没有 `schema_version` 或版本为 v1 的记录时走迁移适配器，而不是报错。

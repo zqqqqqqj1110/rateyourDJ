@@ -95,17 +95,33 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 需要完成
 
-- [ ] 归档当前单元测试、50-case eval 和 trajectory quality 结果；
-- [ ] 保存当前 L3/L4 推荐结果作为 relevance baseline；
-- [ ] 归档一次旧 DeepSeek 提名 + Spotify grounding 路径的结果，之后该路径下线；
-- [ ] 标记 `data/grpo.jsonl`、`data/sft.jsonl`、`data/dataset.jsonl` 为旧格式废弃数据（已移出 Git，本地保留），新训练数据从头生成；
-- [ ] 定义 `UserContextV2`、`SongProfileV2`、`RetrievalCandidateV2`、feedback 和 training sample schema；
-- [ ] 定义内部 song ID 与外部平台 ID 的边界；
-- [ ] 定义 head/mid/tail 初始阈值及版本字段；
-- [ ] 定义训练、验证和测试隔离原则；
-- [ ] 定义 run manifest：git commit、数据版本、模型、adapter、seed、配置和指标；
-- [ ] 将 thought coverage 门禁改为检查 action、decision summary 和 evidence；
-- [ ] 准备新旧 schema 迁移测试骨架。
+- [x] 归档当前单元测试、50-case eval 和 trajectory quality 结果；（脚本：`scripts/baseline_v0.py`，需在 Mac 本机联网运行）
+- [x] ~~保存当前 L3/L4 推荐结果作为 relevance baseline~~（决定：不做规则模式 baseline；长尾 baseline 在阶段 3 新曲库上建立）；
+- [x] 归档一次旧 DeepSeek 提名 + Spotify grounding 路径的结果，之后该路径下线；
+- [x] 标记 `data/grpo.jsonl`、`data/sft.jsonl`、`data/dataset.jsonl` 为旧格式废弃数据（已移出 Git，本地保留），新训练数据从头生成；
+- [x] 定义 `UserContextV2`、`SongProfileV2`、`RetrievalCandidateV2`、feedback 和 training sample schema；
+- [x] 定义内部 song ID 与外部平台 ID 的边界；
+- [x] 定义 head/mid/tail 初始阈值及版本字段；
+- [x] 定义训练、验证和测试隔离原则；
+- [x] 定义 run manifest：git commit、数据版本、模型、adapter、seed、配置和指标；
+- [x] 将 thought coverage 门禁改为检查 action、decision summary 和 evidence；
+- [x] 准备新旧 schema 迁移测试骨架。
+
+### Baseline 结果（`runs/baseline-v0/`，2026-09-26，macOS / Python 3.12）
+
+| 项目 | 结果 |
+|---|---|
+| 单元测试 | 265 passed，4 skipped |
+| 50-case eval suite | 50/50 PASS |
+| 旧路径：请求数 | 50（`eval/queries_v1.jsonl`，deepseek-chat + Spotify/Last.fm grounding） |
+| 旧路径：推新歌 / 只回答 | 48 / 2（2 条因 DeepSeek 工具参数不合法而退化成只回答，0 首） |
+| 旧路径：填充率（出歌数 ÷ 请求数） | 48.3%，平均 3.72 首 |
+| 旧路径：分类填充率 | 多样性 0.70、单锚点相似 0.57、基础 0.55、双锚点 0.55、版本噪声 0.53、session 追加 0.36、负向约束 0.34、UI 总结 0.30 |
+| 旧路径：延迟 | P50 12.4 s，P95 23.1 s |
+| 旧路径：decision summary / evidence 覆盖率 | 100% / 100%（186 首） |
+| 不可得指标 | grounding 率、幻觉率（先回答路径不记录 `discover_tracks`）；长尾指标（旧路径无曲库和分档） |
+
+说明：manifest 中 `git.dirty = true`，运行时代码为 commit `520e7d1` 加上阶段 0 的未提交改动（`scripts/baseline_v0.py`、`l6/tools.py` 的 discovery_service 修复等），提交后以该 commit 为准。
 
 ### 本阶段不动
 
@@ -117,10 +133,10 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 完成标准
 
-- [ ] 当前 baseline 已归档；
-- [ ] 所有 V2 schema 有示例 JSON 和字段说明；
-- [ ] 新设计不破坏现有 API 核心结构；
-- [ ] 只看契约文档即可理解数据流。
+- [x] 当前 baseline 已归档；
+- [x] 所有 V2 schema 有示例 JSON 和字段说明；
+- [x] 新设计不破坏现有 API 核心结构；
+- [x] 只看契约文档即可理解数据流。
 
 ## 5. 阶段 1：单用户上下文与长尾曲库
 

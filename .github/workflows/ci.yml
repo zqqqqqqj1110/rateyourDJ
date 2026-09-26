@@ -4,8 +4,9 @@ name: CI
 # Three gates run on every push and pull request:
 #   1. unit tests (the non-web suite is the real baseline; Flask is optional)
 #   2. the fixed eval-suite regression (agent behavior correctness)
-#   3. the trajectory-quality gate (grounding hallucination rate + ReAct
-#      thought coverage) over any committed sample trajectories
+#   3. the trajectory-quality gate (V2: valid actions, decision summaries,
+#      recommendation evidence; thought coverage is opt-in) over any
+#      committed sample trajectories
 on:
   push:
     branches: [main, master]
@@ -35,7 +36,7 @@ jobs:
         run: |
           PYTHONPATH=src python -m rateyourdj.l7.cli run-eval-suite
 
-      - name: Trajectory-quality gate (grounding + ReAct)
+      - name: Trajectory-quality gate (action / summary / evidence)
         # Only enforce when sample trajectories are committed under data/.
         # Skips cleanly (no failure) when there are none yet.
         run: |

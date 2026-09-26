@@ -223,8 +223,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     quality.add_argument("--max-hallucination-rate", type=float, default=0.5)
     quality.add_argument("--min-grounding-rate", type=float, default=0.3)
-    quality.add_argument("--min-thought-coverage-rate", type=float, default=0.9)
-    quality.add_argument("--max-missing-thought", type=int, default=0)
+    quality.add_argument("--max-invalid-actions", type=int, default=0)
+    quality.add_argument("--min-summary-coverage-rate", type=float, default=0.95)
+    quality.add_argument("--min-evidence-coverage-rate", type=float, default=0.9)
+    # thought gating is opt-in since V2
+    quality.add_argument("--min-thought-coverage-rate", type=float, default=None)
+    quality.add_argument("--max-missing-thought", type=int, default=None)
 
     ab = subparsers.add_parser(
         "ab-compare",
@@ -290,6 +294,9 @@ def main() -> int:
                 min_grounding_rate=args.min_grounding_rate,
                 min_thought_coverage_rate=args.min_thought_coverage_rate,
                 max_missing_thought=args.max_missing_thought,
+                max_invalid_actions=args.max_invalid_actions,
+                min_summary_coverage_rate=args.min_summary_coverage_rate,
+                min_evidence_coverage_rate=args.min_evidence_coverage_rate,
             )
             _print_json(
                 {"metrics": report.to_dict(), "gate": gate.to_dict()}

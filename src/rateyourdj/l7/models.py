@@ -270,6 +270,15 @@ class TrajectoryQualityReport:
     average_thought_length: float
     model_decisions_missing_thought: int
     skipped_files: list[str]
+    # V2 trace quality (TODO stage 0): action / decision summary / evidence
+    invalid_action_count: int = 0
+    action_coverage_rate: float = 0.0
+    decision_count: int = 0
+    decisions_with_summary: int = 0
+    summary_coverage_rate: float = 0.0
+    recommendation_count: int = 0
+    recommendations_with_evidence: int = 0
+    evidence_coverage_rate: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -292,6 +301,14 @@ class TrajectoryQualityReport:
                 self.model_decisions_missing_thought
             ),
             "skipped_files": list(self.skipped_files),
+            "invalid_action_count": self.invalid_action_count,
+            "action_coverage_rate": self.action_coverage_rate,
+            "decision_count": self.decision_count,
+            "decisions_with_summary": self.decisions_with_summary,
+            "summary_coverage_rate": self.summary_coverage_rate,
+            "recommendation_count": self.recommendation_count,
+            "recommendations_with_evidence": self.recommendations_with_evidence,
+            "evidence_coverage_rate": self.evidence_coverage_rate,
         }
 
 

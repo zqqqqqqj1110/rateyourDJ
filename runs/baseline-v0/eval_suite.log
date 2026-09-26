@@ -1,0 +1,5 @@
+[eval-suite] eval_cases_v1: 50/50 passed, 0 failed
+[eval-suite] categories: basic=12, constraints=10, edge=6, feedback=6, provider=6, session=10
+[eval-suite] status: PASS
+
+--- stderr ---

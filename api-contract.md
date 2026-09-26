@@ -376,3 +376,121 @@ Current endpoints can map to the new contract during migration:
 | `GET /api/agent-status` | `GET /api/v1/agent/status` |
 
 The frontend should migrate to `/api/v1` first. Internal modules can still call existing services until the agent runtime and provider adapters are split.
+
+---
+
+# V2 字段（长尾推荐重构）
+
+> TODO.md 阶段 0 产物。原则：**只加字段，不改、不删已有字段**，现有前端不改也能继续工作。数据格式见 `data-contract.md` §9，工具见 `agent-tools-contract.md` V2 节。
+
+## V2.1 Recommend 请求新增字段
+
+```json
+{
+  "user_id": "participant_001",
+  "message": "来点像 Wish You Were Here 但更冷门的",
+  "exploration_level": 0.7,
+  "branch_hint": null,
+  "strategy": null
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `exploration_level` | number/null | 0–1；不传则用用户上下文里的默认值 |
+| `branch_hint` | string/null | 可选，指定兴趣分支（如 `pink_floyd`）；不传则自动判断 |
+| `strategy` | string/null | 仅开发和实验用：强制使用某个策略版本；普通请求不传 |
+
+`mode` 的含义变化：`model` = 模型在候选集内选歌；`rules` = 确定性排序。两者的歌都只来自曲库，不再有模型提名歌曲的路径。
+
+## V2.2 Recommend 响应新增字段
+
+每条 `recommendations[]` 新增：
+
+```json
+{
+  "rank": 1,
+  "impression_id": "imp_…",
+  "song_id": "s_…",
+  "bucket": "tail",
+  "channel": "tail",
+  "strategy_version": "rag-tailmix-v1",
+  "model_version": "sft-lora-v1",
+  "source_label": "长尾发现",
+  "playback": {"source": "youtube", "url": "https://www.youtube.com/watch?v=…", "verified": true},
+  "evidence_items": [
+    {"type": "seed_similarity", "detail": "与你的种子 Time 风格接近", "ref": "s_…"}
+  ],
+  "track": {"track_id": "s_…", "external_urls": {"spotify": null, "youtube": "https://www.youtube.com/watch?v=…"}}
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `impression_id` | 这次展示的 ID，反馈必须带上它 |
+| `song_id` | 内部 ID（`s_…`）；`track.track_id` 在 V2 下与它相同 |
+| `bucket` | `head` / `mid` / `tail` / `unknown` |
+| `channel` | 主要召回通道：`rule` / `semantic` / `tail` / `explore` |
+| `source_label` | 前端展示用：`熟悉相关`（head/mid 且相关性高）、`长尾发现`（tail）、`探索`（explore 通道） |
+| `playback` | head/mid 优先 Spotify，tail 用已校验的 YouTube；校验失败为 `{"source": "none"}`，前端显示“暂无可播放链接” |
+| `evidence_items` | V2 证据列表，每条可回溯到曲库；原 `evidence` 对象保留以兼容旧前端 |
+| `track.external_urls.youtube` | 新增键 |
+
+响应顶层新增：
+
+```json
+{
+  "candidate_set_id": "cs_…",
+  "strategy_version": "rag-tailmix-v1",
+  "fallback_reason": null,
+  "interleaving": null
+}
+```
+
+两两交错实验中 `interleaving` 为 `{"pair_id": "pair_…", "arms": {"A": "…", "B": "…"}}`，每条推荐的归属只记在服务端的 ImpressionV2 里，**不返回给前端**，避免影响用户判断。
+
+## V2.3 Feedback 请求新增字段
+
+```json
+{
+  "user_id": "participant_001",
+  "impression_id": "imp_…",
+  "event": "play_progress",
+  "seconds": 142,
+  "fraction": 0.61,
+  "survey": {
+    "heard_before": "no",
+    "relevance": 4,
+    "discovery_value": 5,
+    "too_unfamiliar": false,
+    "would_save": true,
+    "reject_reason": null
+  }
+}
+```
+
+- `impression_id`：V2 反馈必填；没有它的请求返回 `invalid_request`（旧的 `run_id` + `track_id` 形式在迁移期继续接受，按 v1 处理）；
+- `event` 新增：`play_start`、`play_progress`、`completed`、`quick_skip`、`hide`，原有事件保留；
+- `survey` 可选，字段含义见 `data-contract.md` §9.6；`reject_reason` 区分 `dislike_song` 和 `not_in_mood_to_explore`；
+- `phase`（`dev` / `final`）由服务端按实验时间表决定，客户端不能指定。
+
+## V2.4 Agent Status 新增字段
+
+```json
+{
+  "catalog_version": "catalog-…",
+  "index_version": "idx-…",
+  "bucket_version": "bucket-v1",
+  "default_strategy": "rag-tailmix-v1",
+  "model": {"provider": "self-hosted", "base": "…", "adapter": "sft-lora-v1"},
+  "music_providers": {"spotify": true, "youtube_verification": true, "musicbrainz": true, "listenbrainz": true}
+}
+```
+
+## V2.5 参与者数据删除（阶段 6）
+
+```text
+DELETE /api/v1/participant/:user_id
+```
+
+删除该用户的上下文、曝光和反馈（`data/users/<user_id>/`），返回删除的记录数。训练数据中如包含该用户的开发期反馈，需同时在对应 split manifest 中标记并重新生成。

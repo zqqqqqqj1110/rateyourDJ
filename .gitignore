@@ -18,6 +18,9 @@ data/synthetic/
 .pytest_cache/
 data/*.jsonl
 data/training/
-data/raw/
-data/processed/
+data/users/
+data/catalog/
 data/index/
+
+# experiment outputs: keep manifest/summary, ignore raw run data
+runs/**/raw/

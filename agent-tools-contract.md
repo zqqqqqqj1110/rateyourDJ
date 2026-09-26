@@ -712,3 +712,176 @@ During migration, wrappers can expose the new names while calling the old implem
 4. Add provider-backed implementations for `search_tracks`, `get_track_metadata`, and `get_similar_tracks`.
 5. Replace local-only ranking with candidate IDs from external provider tools.
 6. Move feedback writes to the new memory/event model.
+
+---
+
+# V2：候选集内选歌的工具契约（长尾推荐重构）
+
+> TODO.md 阶段 0 产物。数据格式见 `data-contract.md` §9。上文 v1 工具在迁移期继续可用；新代码以本节为准。
+
+## V2.1 范式变化
+
+| | v1（下线） | V2 |
+|---|---|---|
+| 歌从哪来 | DeepSeek 凭记忆提名，再用 Spotify 确认存在 | 只来自曲库的多路召回（RetrievalCandidateV2） |
+| 模型做什么 | 生成歌名 + 解释 | 解析意图、调用召回、**在候选集内**选歌并引用证据 |
+| 幻觉防线 | 事后确认，确认不了就丢 | 事前约束：`song_id` 不在候选集内直接判违规 |
+| 失败回退 | 规则排序 | 确定性排序（阶段 3 的固定策略） |
+
+以下 v1 工具与路径在阶段 3 之前下线：`discover_tracks`、`DiscoveryService.ground_candidates`、统一“先回答”路径里的 `suggest_new`。
+
+## V2.2 工具清单
+
+模型可调用（出现在模型的工具列表里）：
+
+```text
+get_user_context       读取 UserContextV2
+retrieve_candidates    多路召回，返回一个固定的候选集
+get_track_facts        读取候选歌的曲库事实，用于写理由
+rank_candidates        确定性排序（给模型参考，也是回退结果）
+```
+
+仅系统调用（模型看不到）：
+
+```text
+validate_selection     校验模型输出：候选集内、数量、约束、证据引用
+record_impressions     为最终展示的每首歌写 ImpressionV2
+record_feedback        写 FeedbackV2
+```
+
+所有工具沿用上文的 Standard Observation Envelope（`tool` / `status` / `data` / `diagnostics` / `retryable` / `suggested_actions`）。
+
+## V2.3 get_user_context
+
+参数：
+
+```json
+{"user_id": "participant_001"}
+```
+
+`data`：一条 UserContextV2，外加按需算出的摘要（不落盘）：
+
+```json
+{
+  "context": {"schema_version": "user-context/v2", "…": "…"},
+  "derived": {
+    "branches": [
+      {"branch_id": "pink_floyd", "top_tags": ["progressive rock", "psychedelic rock"], "seed_count": 3},
+      {"branch_id": "oasis", "top_tags": ["britpop", "alternative rock"], "seed_count": 3}
+    ]
+  }
+}
+```
+
+## V2.4 retrieve_candidates
+
+参数：
+
+```json
+{
+  "user_id": "participant_001",
+  "query": "来点像 Wish You Were Here 但更冷门的",
+  "branch_hint": "pink_floyd",
+  "exploration_level": 0.7,
+  "limit": 30,
+  "exclude_song_ids": [],
+  "channel_quota": {"rule": 6, "semantic": 10, "tail": 10, "explore": 4}
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `branch_hint` | 可选：`null` 表示按请求自动判断或两条分支都用；取值必须是用户上下文里存在的 `branch_id` |
+| `exploration_level` | 可选，覆盖用户默认值 |
+| `channel_quota` | 可选，默认值由召回配置决定 |
+
+`data`：
+
+```json
+{
+  "candidate_set_id": "cs_…",
+  "index_version": "idx-…",
+  "candidates": ["…RetrievalCandidateV2…"],
+  "channel_counts": {"rule": 6, "semantic": 10, "tail": 9, "explore": 4},
+  "fallback": null
+}
+```
+
+- 同一 `candidate_set_id` 可以复现，候选集会被缓存，供校验和训练样本引用；
+- 没有向量索引时 `fallback: "rule_only"`，只返回标签召回结果，`status: "partial"`。
+
+## V2.5 get_track_facts
+
+参数：`{"song_ids": ["s_…"], "fields": ["title", "artists", "release", "tags", "popularity.bucket"]}`
+
+- `song_ids` 必须属于本轮某个候选集，否则 `status: "error"`；
+- 只返回曲库里有来源的事实，不做生成。
+
+## V2.6 rank_candidates
+
+参数：
+
+```json
+{"candidate_set_id": "cs_…", "strategy": "rag-tailmix-v1", "count": 10}
+```
+
+`strategy` 取值：`rag-rel-v1`（只看相关性）、`rag-tailmix-v1`（固定混排：6 相关 + 3 长尾 + 1 探索，按探索强度调整）。
+
+`data.ranked[]` 每项含 `song_id`、`rank`、`score_breakdown`（relevance、tail_score、tail_relevance、novelty、diversity、exploration_fit、penalties、`weights_version`），结果完全可复算。
+
+## V2.7 模型的最终输出（选择结果）
+
+模型不再输出自由文本歌单，而是输出以下 JSON：
+
+```json
+{
+  "message": "给用户看的一段简短说明",
+  "picks": [
+    {"song_id": "s_…", "reason": "一句话理由", "evidence_refs": [0, 1]}
+  ]
+}
+```
+
+- `evidence_refs` 是该候选 `evidence[]` 的下标，理由里的事实必须能在被引用的证据中找到；
+- **不包含** `thought` 或任何隐藏推理字段。
+
+## V2.8 validate_selection（系统）
+
+按顺序检查，任何一条失败就整轮回退到 `rank_candidates` 的结果，并在轨迹里记录 `fallback_reason`：
+
+1. JSON 合法、字段齐全；
+2. 每个 `song_id` 都在 `candidate_set_id` 内（候选集外推荐率必须为 0）；
+3. 数量、`max_per_artist`、排除项、`min_tail` 等约束满足；
+4. `evidence_refs` 下标有效，且每首至少引用 1 条证据；
+5. 没有重复歌曲。
+
+## V2.9 record_impressions / record_feedback（系统）
+
+- `record_impressions`：最终展示的每首歌写一条 ImpressionV2，带 `rank`、`bucket`、`channel`、`strategy_version`、`model_version`，两两交错实验时带 `interleaving`；
+- `record_feedback`：写 FeedbackV2，必须带 `impression_id`，没有曝光的歌拒绝写入。
+
+## V2.10 推荐轮次的工具流
+
+```text
+get_user_context
+retrieve_candidates            (可调用多次，例如两条分支各一次)
+get_track_facts                (写理由需要时)
+rank_candidates                (可选，参考或回退)
+→ 模型输出 picks
+validate_selection             (系统)
+record_impressions             (系统)
+```
+
+模型不可用（未配置、超时或输出不合法）时：`retrieve_candidates` → `rank_candidates` → `validate_selection` → `record_impressions`，全程确定性。
+
+## V2.11 与 v1 工具的对应
+
+| v1 工具 / 路径 | V2 |
+|---|---|
+| `get_user_memory`、`L1.inspect_user_profile` | `get_user_context` |
+| `search_tracks`、`get_similar_tracks`、`L3.retrieve_candidates` | `retrieve_candidates` |
+| `get_track_metadata`、`L2.inspect_song_profile` | `get_track_facts` |
+| `rank_candidates`、`L4.rank_candidates` | `rank_candidates`（改为按 `candidate_set_id`） |
+| `discover_tracks` + Spotify grounding | 下线 |
+| `record_feedback` | `record_feedback`（改用 FeedbackV2，需要 `impression_id`） |
+| `explain_recommendations` | 合并进模型输出的 `reason` + `evidence_refs` |
