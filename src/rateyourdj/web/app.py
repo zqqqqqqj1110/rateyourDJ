@@ -26,20 +26,7 @@ from rateyourdj.providers import (
     ExternalMusicProvider,
     configured_music_provider_from_env,
 )
-from rateyourdj.domain import (
-    DeepSeekTrackGenerator,
-    DiscoveryService,
-    ExplanationGenerator,
-    TasteSeedTrackGenerator,
-)
-
-
-def _default_track_generator() -> Any:
-    """Use DeepSeek generation when a key is set, else a local taste seed."""
-    generator = DeepSeekTrackGenerator.from_env()
-    if generator is not None:
-        return generator
-    return TasteSeedTrackGenerator()
+from rateyourdj.domain import ExplanationGenerator
 
 
 def create_app(
@@ -50,12 +37,20 @@ def create_app(
     session_dir: str | Path = "data/sessions",
     llm_provider: LLMProvider | None = None,
     music_provider: ExternalMusicProvider | None = None,
-    track_generator: Any | None = None,
-    auto_configure_track_generator: bool = True,
     auto_configure_music_provider: bool = True,
     agent_mode: str = "auto",
+    recommender_v2: Any | None = None,
+    auto_configure_v2: bool = False,
 ) -> Flask:
     app = Flask(__name__)
+    v2_state: dict[str, Any] = {"service": recommender_v2}
+
+    def v2_service() -> Any | None:
+        # V2 users (data/users/<id>/context.json) use retrieval + ranking + ReAct agent.
+        if v2_state["service"] is None and auto_configure_v2:
+            from rateyourdj.agent.factory import build_recommender
+            v2_state["service"] = build_recommender()
+        return v2_state["service"]
     profile_store = JsonProfileStore(profile_dir)
     song_store = JsonSongStore(song_dir)
     trajectory_store = JsonTrajectoryStore(trajectory_dir)
@@ -73,13 +68,6 @@ def create_app(
         if auto_configure_music_provider
         else None
     )
-    resolved_track_generator = (
-        track_generator
-        if track_generator is not None
-        else _default_track_generator()
-        if auto_configure_track_generator
-        else None
-    )
     agent_service = RecommendationAgentService(
         ranking_service,
         song_store,
@@ -90,19 +78,12 @@ def create_app(
                 profile_store,
                 song_store,
                 music_provider=resolved_music_provider,
-                track_generator=resolved_track_generator,
             )
             if resolved_music_provider is not None
             else None
         ),
         llm_provider=llm_provider,
         agent_mode=agent_mode,
-        discovery_service=(
-            DiscoveryService(resolved_track_generator, resolved_music_provider)
-            if resolved_music_provider is not None
-            and resolved_track_generator is not None
-            else None
-        ),
     )
 
     @app.get("/")
@@ -192,8 +173,31 @@ def create_app(
         if not isinstance(payload, dict):
             raise ValueError("request body must be a JSON object")
         constraints = _optional_mapping(payload, "constraints")
+        v2 = v2_service()
+        user_id = _required_string(payload, "user_id")
+        if v2 is not None and v2.has_user(user_id):
+            mode = _optional_choice(payload, "mode", default="auto", choices={"auto", "model", "rules"})
+            exploration = payload.get("exploration_level")
+            if exploration is not None and not (isinstance(exploration, (int, float))
+                                                and 0 <= float(exploration) <= 1):
+                raise ValueError("exploration_level must be a number within [0, 1]")
+            strategy = _optional_string(payload, "strategy")
+            if strategy is not None and strategy not in {"rag-rel-v1", "rag-tailmix-v1"}:
+                raise ValueError("strategy must be rag-rel-v1 or rag-tailmix-v1")
+            result_v2 = v2.recommend(
+                user_id,
+                str(payload.get("message") or ""),
+                count=_optional_int(constraints, "limit", default=10, minimum=1, maximum=20),
+                exploration_level=exploration,
+                branch_hint=_optional_string(payload, "branch_hint"),
+                mode={"auto": "auto", "model": "agent", "rules": "pipeline"}[mode],
+                strategy=strategy,
+            )
+            if not _optional_bool(payload, "include_trace", default=False):
+                result_v2["trace"] = None
+            return jsonify(result_v2), 201
         result = agent_service.recommend(
-            _required_string(payload, "user_id"),
+            user_id,
             _required_string(payload, "message"),
             default_top_k=_optional_int(
                 constraints,
@@ -235,6 +239,24 @@ def create_app(
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             raise ValueError("request body must be a JSON object")
+        if "impression_id" in payload:
+            v2 = v2_service()
+            if v2 is None:
+                raise ValueError("impression-based feedback needs the V2 recommender")
+            try:
+                record_v2 = v2.record_feedback(
+                    _required_string(payload, "user_id"),
+                    _required_string(payload, "impression_id"),
+                    event=_optional_string(payload, "event"),
+                    seconds=payload.get("seconds"),
+                    fraction=payload.get("fraction"),
+                    survey=_optional_mapping(payload, "survey"),
+                )
+            except LookupError as error:
+                return jsonify({"error": str(error)}), 404
+            return jsonify({"feedback_id": record_v2["feedback_id"],
+                            "impression_id": record_v2["impression_id"],
+                            "song_id": record_v2["song_id"], "phase": record_v2["phase"]}), 201
         context = _optional_mapping(payload, "context")
         recommendation_context = dict(context)
         run_id = _optional_string(payload, "run_id")
@@ -828,6 +850,7 @@ def main() -> None:
         session_dir=args.session_dir,
         llm_provider=llm_provider,
         agent_mode=args.agent_mode,
+        auto_configure_v2=True,
     )
     app.run(
         host=args.host,

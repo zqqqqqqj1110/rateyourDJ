@@ -1,0 +1,101 @@
+{
+  "config": {
+    "index_version": "idx-catalog-20260926-baai-bge-m3-doc-v2",
+    "llm": "deepseek:deepseek-chat",
+    "queries": "eval/retrieval_queries_v1.jsonl",
+    "query_count": 13,
+    "with_agent": true
+  },
+  "created_at": "2026-09-27T07:31:09+00:00",
+  "data": {
+    "eval/retrieval_queries_v1.jsonl": "19c5c1ba81e7defc4a708b2226b41aaf521ebc4a0f2617f1753472e4a8b13679",
+    "eval/weak_positives_v1.json": "7267ca45c8bddb579a03385b077a90dc135cc25f8c5fb7195e7ee8f094f84635"
+  },
+  "environment": {
+    "platform": "macOS-15.6.1-arm64-arm-64bit",
+    "python": "3.12.13"
+  },
+  "git": {
+    "commit": "f4fa7e7800bb2f19d4dbcb98fe4e62485004cce6",
+    "dirty": true
+  },
+  "kind": "ranking_eval",
+  "metrics": {
+    "acceptance": {
+      "min_relevance_ratio": 0.9,
+      "min_tail_exposure_gain": 0.5,
+      "passed": true,
+      "relevance_ratio": 0.9867,
+      "tail_exposure_gain": 1.0329
+    },
+    "summary": {
+      "agent-react-v1": {
+        "artist_coverage": 0.0587,
+        "candidate_recall": 0.0462,
+        "catalog_coverage": 0.0059,
+        "constraint_pass": 1.0,
+        "evidence_accuracy": 0.9923,
+        "fallback_rate": 0.1538,
+        "hallucination_rate": 0.0,
+        "hits@10": 0.5385,
+        "ild": 0.183,
+        "mean_latency_ms": 8807.4846,
+        "mean_relevance": 0.9847,
+        "ndcg@10": 0.0458,
+        "novelty": 0.0926,
+        "recall@10": 0.0538,
+        "serendipity": 0.2923,
+        "tail_candidate_recall": null,
+        "tail_coverage": 0.0095,
+        "tail_exposure": 0.4231,
+        "unique_songs": 83
+      },
+      "rag-rel-v1": {
+        "artist_coverage": 0.0446,
+        "candidate_recall": 0.0462,
+        "catalog_coverage": 0.0054,
+        "constraint_pass": 1.0,
+        "evidence_accuracy": 1.0,
+        "hallucination_rate": 0.0,
+        "hits@10": 1.1538,
+        "ild": 0.1577,
+        "mean_relevance": 0.9955,
+        "ndcg@10": 0.1409,
+        "novelty": 0.0423,
+        "recall@10": 0.1154,
+        "serendipity": 0.0,
+        "tail_candidate_recall": null,
+        "tail_coverage": 0.0035,
+        "tail_exposure": 0.2308,
+        "unique_songs": 76
+      },
+      "rag-tailmix-v1": {
+        "artist_coverage": 0.0536,
+        "candidate_recall": 0.0462,
+        "catalog_coverage": 0.0051,
+        "constraint_pass": 1.0,
+        "evidence_accuracy": 1.0,
+        "hallucination_rate": 0.0,
+        "hits@10": 0.9231,
+        "ild": 0.1892,
+        "mean_relevance": 0.9823,
+        "ndcg@10": 0.0627,
+        "novelty": 0.1077,
+        "recall@10": 0.0923,
+        "serendipity": 0.4385,
+        "tail_candidate_recall": null,
+        "tail_coverage": 0.0092,
+        "tail_exposure": 0.4692,
+        "unique_songs": 72
+      }
+    }
+  },
+  "model": {
+    "embedding": "BAAI/bge-m3",
+    "llm": "deepseek:deepseek-chat"
+  },
+  "notes": "",
+  "run_id": "ranking-v2",
+  "schema_version": "run-manifest/v1",
+  "seed": null
+}

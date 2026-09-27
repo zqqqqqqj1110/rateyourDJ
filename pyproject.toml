@@ -37,6 +37,8 @@ rateyourdj-web = "rateyourdj.web.app:main"
 rateyourdj-collect = "rateyourdj.collectors.cli:main"
 rateyourdj-catalog = "rateyourdj.data_pipeline.cli:main"
 rateyourdj-rag = "rateyourdj.rag.cli:main"
+rateyourdj-agent = "rateyourdj.agent.cli:main"
+rateyourdj-rank = "rateyourdj.ranking.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

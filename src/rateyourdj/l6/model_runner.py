@@ -60,55 +60,11 @@ def execute_model_loop(
     executed_calls: set[tuple[str, str]] = set()
     last_ranked_request: AgentRequest | None = None
     tool_names = set(tool_registry.names())
-    discovery_available = "discover_tracks" in tool_names
     provider_search_available = "search_tracks" in tool_names
-    external_candidates_available = discovery_available or provider_search_available
+    external_candidates_available = provider_search_available
 
     model_step_limit = min(max_steps, 5)
-    # Generative discovery is the primary path: DeepSeek proposes songs from the
-    # user's taste, then the provider grounds them. Run it before the model's
-    # own tool selection (and before keyword search) when available.
-    if discovery_available:
-        discovery_args = {
-            "user_id": user_id,
-            "intent": request.query,
-            "limit": min(max(request.top_k * 2, request.top_k), 50),
-        }
-        executed_calls.add(
-            ("discover_tracks", _stable_arguments(discovery_args))
-        )
-        best = _run_discovery(
-            user_id=user_id,
-            request=request,
-            session=session,
-            steps=steps,
-            tool_registry=tool_registry,
-            apply_query_filters=apply_query_filters,
-            arguments=discovery_args,
-            decision_source="program_discovery_first",
-        )
-        decisions.append(
-            {
-                "kind": "program_discovery_first",
-                "summary": (
-                    "program ran generative discovery (LLM proposes, provider "
-                    "grounds) before model tool selection"
-                ),
-                "decision_index": 0,
-            }
-        )
-        if len(best) >= request.top_k:
-            return (
-                request,
-                best[: request.top_k],
-                seed_song_ids,
-                missing_seed_song_ids,
-                rank_attempts,
-                "goal_satisfied",
-                None,
-                decisions,
-            )
-    elif provider_search_available:
+    if provider_search_available:
         executed_calls.add(
             (
                 "search_tracks",
@@ -260,10 +216,9 @@ def execute_model_loop(
             "L4.rank_candidates",
             "rank_candidates",
         }:
-            preferred = "discover_tracks" if discovery_available else "search_tracks"
             validation_feedback.append(
                 f"{decision.tool_name} ignored because external candidate "
-                f"discovery is enabled; use {preferred} with a different intent"
+                "search is enabled; use search_tracks with a different intent"
             )
             continue
 
@@ -299,16 +254,13 @@ def execute_model_loop(
 
         if observation.tool in {"L1.inspect_user_profile", "get_user_memory"}:
             profile_empty = observation.status == "empty"
-        if observation.tool in {"search_tracks", "discover_tracks"}:
+        if observation.tool == "search_tracks":
             user_memory = _latest_user_memory_from_steps(steps)
             similar_artist_candidates = _similar_artist_items_from_steps(
                 steps=steps,
                 request=request,
             )
-            if observation.tool == "discover_tracks":
-                source_tracks = observation.data.get("provider_tracks", [])
-            else:
-                source_tracks = observation.data.get("tracks", [])
+            source_tracks = observation.data.get("tracks", [])
             provider_ranked = _rank_provider_tracks(
                 source_tracks,
                 request=request,
@@ -457,63 +409,6 @@ def _stable_arguments(arguments: dict[str, Any]) -> str:
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
-    )
-
-
-def _run_discovery(
-    *,
-    user_id: str,
-    request: AgentRequest,
-    session: Any,
-    steps: list[dict[str, Any]],
-    tool_registry: ToolRegistry,
-    apply_query_filters: QueryFilter,
-    arguments: dict[str, Any],
-    decision_source: str,
-) -> list[dict[str, Any]]:
-    """Run generative discovery (LLM proposes, provider grounds) program-first.
-
-    Reads user memory, calls the ``discover_tracks`` tool, then ranks and filters
-    the grounded provider tracks with the same logic the model loop uses when it
-    chooses ``discover_tracks`` itself.
-    """
-    memory = _read_user_memory(
-        user_id=user_id,
-        steps=steps,
-        tool_registry=tool_registry,
-        decision_source=decision_source,
-    )
-    observation = tool_registry.call("discover_tracks", **arguments)
-    steps.append(
-        {
-            "step": len(steps) + 1,
-            "tool": observation.tool,
-            "loop_contract": LOOP_CONTRACT_VERSION,
-            "loop_phase": loop_phase_for_tool(observation.tool),
-            "arguments": dict(arguments),
-            "observation": observation.to_dict(),
-            "decision": (
-                "run generative discovery (LLM proposes, provider grounds) "
-                "before model tool selection"
-            ),
-            "decision_source": decision_source,
-        }
-    )
-    similar_artist_candidates = _similar_artist_items_from_steps(
-        steps=steps,
-        request=request,
-    )
-    source_tracks = observation.data.get("provider_tracks", [])
-    provider_ranked = _rank_provider_tracks(
-        source_tracks,
-        request=request,
-        user_memory=memory,
-        similar_artist_candidates=similar_artist_candidates,
-    )
-    return _filter_external_candidates(
-        provider_ranked,
-        request,
-        session=session,
     )
 
 

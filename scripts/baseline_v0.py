@@ -8,6 +8,10 @@ Archives, under runs/baseline-v0/:
   3. manifest.json: git commit, data fingerprints, model and config
 
 Rule-mode recommendation baselines are intentionally NOT archived.
+
+NOTE (stage 3): the legacy "DeepSeek nominates -> Spotify grounds" path was
+removed from the codebase. This script reproduces baseline-v0 only when run on
+commit 15a0efa (stage 0); on later commits the legacy section just falls back.
 All writes go to an isolated copy of the data; data/ is never modified.
 
 Usage (from the repo root):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from rateyourdj.l1 import JsonProfileStore
 from rateyourdj.l2 import JsonSongStore
@@ -30,25 +29,7 @@ def request_recommendations(
     agent_mode: str = "auto",
     llm_provider: LLMProvider | None = None,
     music_provider: ExternalMusicProvider | None = None,
-    discovery_service: Any | None = None,
-    auto_configure_discovery: bool = True,
 ) -> AgentResponse:
-    # Mirror the web app: without a discovery service, tracks the model
-    # nominates in the unified answer-first turn can never be grounded, so the
-    # CLI path silently returned 0 songs.
-    if (
-        discovery_service is None
-        and auto_configure_discovery
-        and music_provider is not None
-    ):
-        from rateyourdj.domain import (
-            DeepSeekTrackGenerator,
-            DiscoveryService,
-            TasteSeedTrackGenerator,
-        )
-
-        generator = DeepSeekTrackGenerator.from_env() or TasteSeedTrackGenerator()
-        discovery_service = DiscoveryService(generator, music_provider)
     profile_store = JsonProfileStore(profile_dir)
     song_store = JsonSongStore(song_dir)
     return RecommendationAgentService(
@@ -67,7 +48,6 @@ def request_recommendations(
         ),
         llm_provider=llm_provider,
         agent_mode=agent_mode,
-        discovery_service=discovery_service,
     ).recommend(
         user_id,
         query,

@@ -56,7 +56,6 @@ class ABVariant:
     seed_profile: bool = True
     llm_provider_factory: Callable[[], Any] | None = None
     music_provider_factory: Callable[[], Any] | None = None
-    track_generator_factory: Callable[[], Any] | None = None
 
 
 def run_ab_comparison(
@@ -108,11 +107,6 @@ def _run_variant(
             if variant.music_provider_factory is not None
             else None
         )
-        track_generator = (
-            variant.track_generator_factory()
-            if variant.track_generator_factory is not None
-            else None
-        )
         llm_provider = (
             variant.llm_provider_factory()
             if variant.llm_provider_factory is not None
@@ -122,7 +116,6 @@ def _run_variant(
             profile_store,
             song_store,
             music_provider=music_provider,
-            track_generator=track_generator,
             session_store=session_store,
         )
         service = RecommendationAgentService(

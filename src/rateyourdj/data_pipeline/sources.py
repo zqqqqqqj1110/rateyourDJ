@@ -22,6 +22,9 @@ LB_LABS = "https://labs.api.listenbrainz.org"
 DEFAULT_SIMILAR_ARTISTS_ALGORITHM = (
     "session_based_days_7500_session_300_contribution_5_threshold_10_limit_100_filter_True_skip_30"
 )
+DEFAULT_SIMILAR_RECORDINGS_ALGORITHM = (
+    "session_based_days_7500_session_300_contribution_5_threshold_15_limit_50_skip_30"
+)
 NON_STUDIO_SECONDARY_TYPES = {"live", "compilation", "remix", "dj-mix", "demo", "interview",
                               "soundtrack", "spokenword", "audiobook", "mixtape/street"}
 # Checked only against a title's version suffix ("(...)", "[...]", " - ...") and
@@ -220,6 +223,21 @@ class ListenBrainzClient:
             if mbid and mbid != artist_mbid:
                 out.append({"mbid": mbid, "name": row.get("name"),
                             "score": float(row.get("score") or 0)})
+        return sorted(out, key=lambda x: -x["score"])
+
+    def similar_recordings(self, recording_mbid: str, *,
+                           algorithm: str = DEFAULT_SIMILAR_RECORDINGS_ALGORITHM) -> list[dict[str, Any]]:
+        """Recordings co-listened with this one in real listening sessions (LB Labs)."""
+        url = f"{LB_LABS}/similar-recordings/json?" + urlencode(
+            {"recording_mbids": recording_mbid, "algorithm": algorithm})
+        rows = _flatten_dicts(self.http.get(url, allow_404=True))
+        out = []
+        for row in rows:
+            mbid = row.get("recording_mbid")
+            if mbid and mbid != recording_mbid:
+                out.append({"recording_mbid": mbid, "score": float(row.get("score") or 0),
+                            "title": row.get("recording_name"),
+                            "artist_credit": row.get("artist_credit_name")})
         return sorted(out, key=lambda x: -x["score"])
 
     def top_recordings_for_artist(self, artist_mbid: str) -> list[dict[str, Any]]:

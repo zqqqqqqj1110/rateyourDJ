@@ -341,35 +341,95 @@ participant_001 的种子歌曲 + 当前文本请求
 - Web/API 的反馈字段
 - L4-L7 与 API 测试
 
+> 实际落地：排序、校验、指标放在新包 `src/rateyourdj/ranking/`，ReAct agent 与曝光/反馈服务放在新包 `src/rateyourdj/agent/`；旧 L4–L7 只做删减（DeepSeek 提名链路已删除），Web/API 的 `/api/v1/agent/recommend` 与 `/feedback` 对 V2 用户改走新服务。
+
 ### 需要完成：排序
 
-- [ ] 增加 relevance、tail score、tail relevance、novelty、diversity 和 exploration fit；
-- [ ] 使用 `tail_relevance = relevance * tail_score`；
-- [ ] 增加重复艺人、已听歌曲和过度相似惩罚；
-- [ ] 实现 relevance-only baseline；
-- [ ] 实现固定混排 baseline，例如 `6 relevant + 3 long-tail + 1 exploration`；
-- [ ] 根据探索强度调整配额并保留上下限；
-- [ ] 在 `score_breakdown` 保存全部分量和权重版本；
-- [ ] Agent 只能在候选集内选歌，违规时回退规则排序。
+- [x] 增加 relevance、tail score、tail relevance、novelty、diversity 和 exploration fit；
+- [x] 使用 `tail_relevance = relevance * tail_score`；
+- [x] 增加重复艺人、已听歌曲和过度相似惩罚；
+- [x] 实现 relevance-only baseline；
+- [x] 实现固定混排 baseline，例如 `6 relevant + 3 long-tail + 1 exploration`；
+- [x] 根据探索强度调整配额并保留上下限；
+- [x] 在 `score_breakdown` 保存全部分量和权重版本；
+- [x] Agent 只能在候选集内选歌，违规时回退规则排序。
 
 ### 需要完成：反馈
 
-- [ ] 增加 impression、rank、bucket、retrieval channel 和 strategy version；
-- [ ] 记录播放开始、时长、完成、快速跳过、喜欢和收藏；
-- [ ] 记录此前是否听过、相关性、发现价值和“太陌生”；
-- [ ] 区分“不喜欢歌曲”和“当前不想探索”；
-- [ ] 没有曝光的歌曲不能成为负反馈；
-- [ ] feedback 关联 trajectory、策略版本和候选来源。
+- [x] 增加 impression、rank、bucket、retrieval channel 和 strategy version；
+- [x] 记录播放开始、时长、完成、快速跳过、喜欢和收藏；
+- [x] 记录此前是否听过、相关性、发现价值和“太陌生”；
+- [x] 区分“不喜欢歌曲”和“当前不想探索”；
+- [x] 没有曝光的歌曲不能成为负反馈；
+- [x] feedback 关联 trajectory、策略版本和候选来源。
 
 ### 需要完成：评估
 
-- [ ] 增加 Recall@K、NDCG@K；
-- [ ] 增加 Tail Candidate Recall、Tail Coverage、Tail Exposure；
-- [ ] 增加 Catalog/Artist Coverage；
-- [ ] 增加 Intra-list Diversity、Novelty 和 Serendipity；
-- [ ] 增加 Hallucination Rate、Constraint Pass Rate 和 Evidence Accuracy；
-- [ ] 按兴趣分支、长尾分桶和探索强度分层报告；
-- [ ] 固定测试集、候选集、seed 和指标版本，并输出 JSON/CSV。
+- [x] 增加 Recall@K、NDCG@K；
+- [x] 增加 Tail Candidate Recall、Tail Coverage、Tail Exposure；
+- [x] 增加 Catalog/Artist Coverage；
+- [x] 增加 Intra-list Diversity、Novelty 和 Serendipity；
+- [x] 增加 Hallucination Rate、Constraint Pass Rate 和 Evidence Accuracy；
+- [x] 按兴趣分支、长尾分桶和探索强度分层报告；
+- [x] 固定测试集、候选集、seed 和指标版本，并输出 JSON/CSV。
+
+### 实现记录：排序、Agent 与评估是如何做的（2026-09-27）
+
+代码在 `src/rateyourdj/ranking/`（排序、校验、指标、弱正例、评估）和 `src/rateyourdj/agent/`（工具、ReAct 循环、推荐服务）。详细说明见 `stage-3.md`。
+
+**1. 排序（`ranker.py`，权重版本 `rank-w1`）**
+
+- 每个候选算 6 个分量：relevance（阶段 2 的混合相关性）、tail_score（全网冷门程度）、tail_relevance = relevance × tail_score、novelty、diversity（与已选歌的最大相似度的补）、exploration_fit；
+- 惩罚：同艺人已选（只对混排生效，软惩罚 0.3/首）、用户听过（1.0）、近重复（相似度 > 0.97，0.5）；另有硬上限：每位艺人最多 2 首；
+- 两个确定性策略：`rag-rel-v1` 只按相关性；`rag-tailmix-v1` 按配额混排，count=10、探索 0.5 时为 6 相关 + 3 长尾 + 1 探索，配额随探索强度变化；
+- 每首歌的 `score_breakdown` 保存全部分量、惩罚和权重版本，结果可完全复算。
+
+**2. 校验器（`validator.py`）**
+
+- 检查：候选集外、重复、被排除、数量、艺人上限、最少长尾数、reason 为空、evidence_refs 越界；
+- 除了错误文本，还返回结构化的 `violations`，供 agent 修正时使用。
+
+**3. ReAct agent（`agent/`）**
+
+- 工具：`get_user_context`、`retrieve_candidates`、`get_track_facts`、`rank_candidates`、`submit_recommendations`，每次调用必须带可见的 `summary`（不保存隐藏思维）；
+- 模型走 OpenAI 兼容接口：现在是 DeepSeek，阶段 4/5 换成自己微调的模型时只改 `AGENT_LLM_*` 环境变量，循环不变；
+- 提交后由校验器检查；不通过就把**具体修改要求**（去掉哪几首、可换哪几首）作为工具结果返回，最多修正 2 次；仍失败、模型出错或步数（8）用完时，退回确定性排序 `rag-tailmix-v1`，保证每次都有合法结果；
+- 推荐服务 `RecommenderV2`：每首展示的歌写一条 `ImpressionV2`，反馈必须引用 impression_id（没有曝光就没有反馈），反馈区分“不喜欢这首”和“当前不想探索”。
+
+**4. 离线评估（`evaluate.py`，指标版本 `metrics-v1`）**
+
+- 13 条固定查询（与阶段 2 相同），固定索引与候选集；
+- “正确答案” `weak-pos-v1`：ListenBrainz Labs 相似录音（基于真实收听会话），只用于评估，不进任何 reward；
+- 指标：Recall/NDCG@10、候选召回、长尾曝光/覆盖、新颖度、列表内多样性、意外发现度、幻觉率、约束通过率、证据准确率、曲库/艺人覆盖；按兴趣分支、探索强度、分档分层；输出 JSON / CSV / Markdown。
+
+**5. 迭代过程**
+
+| 版本 | 改动 | 长尾曝光 | 退回率 | 问题 |
+|---|---|---|---|---|
+| ranking-v1 | 第一版 agent 提示词 | 74% | 0/13 | 过度偏向长尾，相关性下降 |
+| ranking-v2 | 平衡提示词 + 按探索强度给目标长尾区间 | 42% | 2/13 | 两次因同艺人超上限退回 |
+| ranking-v3 | 校验失败时给具体修改要求，修正次数 1 → 2 | 39% | 0/13 | — |
+
+**6. 结果（`runs/ranking-v3/`）**
+
+| 指标 | rag-rel-v1 | rag-tailmix-v1 | agent-react-v1 |
+|---|---|---|---|
+| 长尾曝光 | 23.1% | 46.9% | 39.2% |
+| 平均相关性 | 0.9955 | 0.9823 | 0.9873 |
+| Recall@10 | 0.115 | 0.092 | 0.100 |
+| 意外发现度 | 0 | 0.439 | 0.277 |
+| 幻觉率 | 0 | 0 | 0 |
+| 约束通过率 | 100% | 100% | 100% |
+| 证据准确率 | 100% | 100% | 97.7% |
+
+验收（事先约定）：固定混排相关性 = 只看相关性的 98.7%（要求 ≥ 90%），长尾曝光 +103%（要求 ≥ +50%），**通过**。
+
+**已知局限**
+
+- 弱正例全部是 head 歌（曲库里 Pink Floyd 81 首、Oasis 131 首，tail 为 0），所以 Recall/NDCG 衡量的是“熟悉度”，长尾策略 Recall 下降是预期的，不能用它判断长尾推荐质量；
+- 热门歌集中（hubness）：13 × 10 次推荐只有 72–83 首不同歌；
+- agent 的 `summary` 和 `reason` 不经校验，偶有数字不符（如说“5 首长尾”实为 6 首）；证据准确率只检查数字，3/130 条理由引用了证据里没有的数字；
+- agent 单次约 9 秒（DeepSeek 多轮工具调用），平均 9.2 秒、最长 11.3 秒。
 
 ### 本阶段不动
 
@@ -381,11 +441,11 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 完成标准
 
-- [ ] 排序结果可完全复算；
-- [ ] 候选集外推荐率为 0；
-- [ ] 固定长尾策略提高长尾曝光，相关性下降在预设范围内；
-- [ ] 每次推荐可关联曝光和反馈；
-- [ ] 已形成训练可复用的 oracle、约束校验器和指标函数。
+- [x] 排序结果可完全复算；
+- [x] 候选集外推荐率为 0；
+- [x] 固定长尾策略提高长尾曝光，相关性下降在预设范围内；
+- [x] 每次推荐可关联曝光和反馈；
+- [x] 已形成训练可复用的 oracle、约束校验器和指标函数。
 
 ## 8. 阶段 4：SFT + LoRA
 
@@ -569,7 +629,7 @@ participant_001 的种子歌曲 + 当前文本请求
 | L3 | 增加文本、种子、长尾和探索召回，输出 evidence | 保留标签召回作为 baseline/fallback |
 | L4 | 增加 tail relevance、novelty、diversity 和固定混排 | 保留确定性打分与 score breakdown |
 | L5 | 增加 impression、时长、熟悉度和发现价值 | 保留 like/skip/favorite reward |
-| L6 | 接入微调模型，限制候选内选择，输出结构化策略；下线 DeepSeek 提名 + Spotify grounding | 保留工具、guards、trajectory 和 rule fallback |
+| L6 | 接入微调模型，限制候选内选择，输出结构化策略；下线 DeepSeek 提名 + Spotify grounding（已完成，新 agent 在 `src/rateyourdj/agent/`） | 保留工具、guards、trajectory 和 rule fallback |
 | L7 | 增加长尾、覆盖、多样性和消融指标 | 保留 50-case eval 与导出能力 |
 | training | 重构 SFT schema；GRPO 改为程序化 reward | 保留 TRL/PEFT 入口和惰性依赖设计 |
 | Web/API | 增加探索控制、来源标记和实验反馈 | 保留主界面、API 主结构和 Spotify embed |
