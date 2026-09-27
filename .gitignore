@@ -24,3 +24,6 @@ data/index/
 
 # experiment outputs: keep manifest/summary, ignore raw run data
 runs/**/raw/
+
+# stage 2 retrieval artifacts
+data/candidates/

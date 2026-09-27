@@ -1,0 +1,13 @@
+{"id": "pf-text-zh", "text": "来点像 Time 那样迷幻、有空间感的歌", "branch_hint": null, "exploration": 0.5, "expect": "pink_floyd"}
+{"id": "pf-text-en", "text": "atmospheric progressive rock like Wish You Were Here, but lesser known", "branch_hint": null, "exploration": 0.5, "expect": "pink_floyd"}
+{"id": "pf-genre-zh", "text": "前卫摇滚里的冷门佳作", "branch_hint": null, "exploration": 0.5, "expect": "pink_floyd"}
+{"id": "pf-hint", "text": "", "branch_hint": "pink_floyd", "exploration": 0.5, "expect": "pink_floyd"}
+{"id": "oasis-text-zh", "text": "像 Live Forever 那样旋律很强的英伦吉他摇滚", "branch_hint": null, "exploration": 0.5, "expect": "oasis"}
+{"id": "oasis-text-en", "text": "melodic 90s britpop guitar songs, deep cuts", "branch_hint": null, "exploration": 0.5, "expect": "oasis"}
+{"id": "oasis-hint", "text": "", "branch_hint": "oasis", "exploration": 0.5, "expect": "oasis"}
+{"id": "both-between", "text": "介于 Pink Floyd 和 Oasis 之间的歌", "branch_hint": null, "exploration": 0.5, "expect": "both"}
+{"id": "both-psych-brit", "text": "迷幻一点的英伦摇滚", "branch_hint": null, "exploration": 0.5, "expect": "both"}
+{"id": "both-none", "text": "", "branch_hint": null, "exploration": 0.5, "expect": "both"}
+{"id": "explore-0.1", "text": "像 Champagne Supernova 那样宏大的歌", "branch_hint": null, "exploration": 0.1, "expect": "oasis"}
+{"id": "explore-0.5", "text": "像 Champagne Supernova 那样宏大的歌", "branch_hint": null, "exploration": 0.5, "expect": "oasis"}
+{"id": "explore-0.9", "text": "像 Champagne Supernova 那样宏大的歌", "branch_hint": null, "exploration": 0.9, "expect": "oasis"}

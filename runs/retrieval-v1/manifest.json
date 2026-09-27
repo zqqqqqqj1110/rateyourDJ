@@ -1,0 +1,51 @@
+{
+  "config": {
+    "catalog_version": "catalog-20260926",
+    "index_version": "idx-catalog-20260926-baai-bge-m3-doc-v2",
+    "model": "BAAI/bge-m3",
+    "queries": "eval/retrieval_queries_v1.jsonl",
+    "query_count": 13
+  },
+  "created_at": "2026-09-27T05:24:39+00:00",
+  "data": {
+    "eval/retrieval_queries_v1.jsonl": "19c5c1ba81e7defc4a708b2226b41aaf521ebc4a0f2617f1753472e4a8b13679"
+  },
+  "environment": {
+    "platform": "macOS-15.6.1-arm64-arm-64bit",
+    "python": "3.12.13"
+  },
+  "git": {
+    "commit": "3fd457cff9f4949f9b081e10379457c1098546e7",
+    "dirty": true
+  },
+  "kind": "retrieval_eval",
+  "metrics": {
+    "rag": {
+      "branch_accuracy_tag": 0.977,
+      "branch_accuracy_vec": 0.977,
+      "relevant_share_tag": 0.949,
+      "relevant_share_vec": 0.841,
+      "relevant_tail_tag": 11.385,
+      "relevant_tail_vec": 9.769,
+      "tail_share": 0.387,
+      "unique_artist_share": 0.575
+    },
+    "rule_only": {
+      "branch_accuracy_tag": 0.997,
+      "branch_accuracy_vec": 0.957,
+      "relevant_share_tag": 0.941,
+      "relevant_share_vec": 0.431,
+      "relevant_tail_tag": 10.692,
+      "relevant_tail_vec": 1.462,
+      "tail_share": 0.374,
+      "unique_artist_share": 0.587
+    }
+  },
+  "model": {
+    "embedding": "BAAI/bge-m3"
+  },
+  "notes": "",
+  "run_id": "retrieval-v1",
+  "schema_version": "run-manifest/v1",
+  "seed": null
+}

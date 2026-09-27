@@ -10,7 +10,11 @@ requires-python = ">=3.10"
 dependencies = ["Flask>=3.0,<4"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9"]
+dev = ["pytest>=8,<9", "numpy>=1.24"]
+rag = [
+    "numpy>=1.24",
+    "sentence-transformers>=3.0",
+]
 training = [
     "torch>=2.2",
     "transformers>=4.44",
@@ -32,6 +36,7 @@ rateyourdj-train = "rateyourdj.training.cli:main"
 rateyourdj-web = "rateyourdj.web.app:main"
 rateyourdj-collect = "rateyourdj.collectors.cli:main"
 rateyourdj-catalog = "rateyourdj.data_pipeline.cli:main"
+rateyourdj-rag = "rateyourdj.rag.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

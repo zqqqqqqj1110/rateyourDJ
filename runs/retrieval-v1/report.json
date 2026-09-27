@@ -1,0 +1,1024 @@
+{
+ "judges": {
+  "top_share": 0.15,
+  "kinds": [
+   "vec",
+   "tag"
+  ]
+ },
+ "systems": {
+  "rule_only": {
+   "summary": {
+    "branch_accuracy_tag": 0.997,
+    "branch_accuracy_vec": 0.957,
+    "relevant_share_tag": 0.941,
+    "relevant_share_vec": 0.431,
+    "relevant_tail_tag": 10.692,
+    "relevant_tail_vec": 1.462,
+    "tail_share": 0.374,
+    "unique_artist_share": 0.587
+   },
+   "all_traceable": true,
+   "all_evidence_valid": true,
+   "branch_overlap_jaccard": 0.0,
+   "hub_songs": 6,
+   "max_song_frequency": 8,
+   "exploration_tail_share": {
+    "explore-0.1": 0.233,
+    "explore-0.5": 0.367,
+    "explore-0.9": 0.5
+   },
+   "per_query": [
+    {
+     "id": "pf-text-zh",
+     "n": 30,
+     "tail_share": 0.367,
+     "buckets": {
+      "tail": 11,
+      "mid": 13,
+      "head": 6
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.6,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.567,
+     "relevant_tail_vec": 2,
+     "branch_accuracy_vec": 0.9,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "pf-text-en",
+     "n": 30,
+     "tail_share": 0.333,
+     "buckets": {
+      "tail": 10,
+      "mid": 11,
+      "head": 9
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.6,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.3,
+     "relevant_tail_vec": 0,
+     "branch_accuracy_vec": 0.9,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "pf-genre-zh",
+     "n": 30,
+     "tail_share": 0.333,
+     "buckets": {
+      "tail": 10,
+      "mid": 7,
+      "head": 13
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.333,
+     "relevant_tail_vec": 0,
+     "branch_accuracy_vec": 0.967,
+     "relevant_share_tag": 0.9,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "pf-hint",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 6,
+      "head": 12
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.6,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.433,
+     "relevant_tail_vec": 1,
+     "branch_accuracy_vec": 0.9,
+     "relevant_share_tag": 0.9,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "oasis-text-zh",
+     "n": 30,
+     "tail_share": 0.367,
+     "buckets": {
+      "tail": 11,
+      "mid": 11,
+      "head": 8
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.6,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.467,
+     "relevant_tail_vec": 1,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "oasis-text-en",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 10,
+      "head": 8
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.633,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.367,
+     "relevant_tail_vec": 2,
+     "branch_accuracy_vec": 0.967,
+     "relevant_share_tag": 0.967,
+     "relevant_tail_tag": 12,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "oasis-hint",
+     "n": 30,
+     "tail_share": 0.367,
+     "buckets": {
+      "tail": 11,
+      "mid": 10,
+      "head": 9
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.467,
+     "relevant_tail_vec": 3,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "both-between",
+     "n": 30,
+     "tail_share": 0.433,
+     "buckets": {
+      "tail": 13,
+      "mid": 13,
+      "head": 4
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.3,
+     "relevant_tail_vec": 0,
+     "relevant_share_tag": 1.0,
+     "relevant_tail_tag": 13
+    },
+    {
+     "id": "both-psych-brit",
+     "n": 30,
+     "tail_share": 0.333,
+     "buckets": {
+      "tail": 10,
+      "mid": 8,
+      "head": 12
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.6,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.567,
+     "relevant_tail_vec": 1,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 10
+    },
+    {
+     "id": "both-none",
+     "n": 30,
+     "tail_share": 0.433,
+     "buckets": {
+      "tail": 13,
+      "mid": 13,
+      "head": 4
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.3,
+     "relevant_tail_vec": 0,
+     "relevant_share_tag": 1.0,
+     "relevant_tail_tag": 13
+    },
+    {
+     "id": "explore-0.1",
+     "n": 30,
+     "tail_share": 0.233,
+     "buckets": {
+      "tail": 7,
+      "mid": 11,
+      "head": 12
+     },
+     "channels": {
+      "tail": 7,
+      "explore": 1,
+      "rule": 22
+     },
+     "unique_artist_share": 0.533,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.567,
+     "relevant_tail_vec": 2,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 1.0,
+     "relevant_tail_tag": 7,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "explore-0.5",
+     "n": 30,
+     "tail_share": 0.367,
+     "buckets": {
+      "tail": 11,
+      "mid": 10,
+      "head": 9
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "rule": 17
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.467,
+     "relevant_tail_vec": 3,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "explore-0.9",
+     "n": 30,
+     "tail_share": 0.5,
+     "buckets": {
+      "tail": 15,
+      "mid": 7,
+      "head": 8
+     },
+     "channels": {
+      "tail": 14,
+      "explore": 5,
+      "rule": 11
+     },
+     "unique_artist_share": 0.633,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.467,
+     "relevant_tail_vec": 4,
+     "branch_accuracy_vec": 0.933,
+     "relevant_share_tag": 0.867,
+     "relevant_tail_tag": 14,
+     "branch_accuracy_tag": 0.967
+    }
+   ]
+  },
+  "rag": {
+   "summary": {
+    "branch_accuracy_tag": 0.977,
+    "branch_accuracy_vec": 0.977,
+    "relevant_share_tag": 0.949,
+    "relevant_share_vec": 0.841,
+    "relevant_tail_tag": 11.385,
+    "relevant_tail_vec": 9.769,
+    "tail_share": 0.387,
+    "unique_artist_share": 0.575
+   },
+   "all_traceable": true,
+   "all_evidence_valid": true,
+   "branch_overlap_jaccard": 0.0,
+   "hub_songs": 12,
+   "max_song_frequency": 9,
+   "exploration_tail_share": {
+    "explore-0.1": 0.233,
+    "explore-0.5": 0.367,
+    "explore-0.9": 0.5
+   },
+   "per_query": [
+    {
+     "id": "pf-text-zh",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 10,
+      "head": 8
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.5,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.867,
+     "relevant_tail_vec": 10,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.967,
+     "relevant_tail_tag": 12,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "pf-text-en",
+     "n": 30,
+     "tail_share": 0.433,
+     "buckets": {
+      "tail": 13,
+      "mid": 7,
+      "head": 10
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.667,
+     "relevant_tail_vec": 8,
+     "branch_accuracy_vec": 0.9,
+     "relevant_share_tag": 0.967,
+     "relevant_tail_tag": 12,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "pf-genre-zh",
+     "n": 30,
+     "tail_share": 0.333,
+     "buckets": {
+      "tail": 10,
+      "mid": 8,
+      "head": 12
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.833,
+     "relevant_tail_vec": 10,
+     "branch_accuracy_vec": 0.9,
+     "relevant_share_tag": 0.9,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 0.933
+    },
+    {
+     "id": "pf-hint",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 2,
+      "head": 16
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.533,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.833,
+     "relevant_tail_vec": 10,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 1.0,
+     "relevant_tail_tag": 12,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "oasis-text-zh",
+     "n": 30,
+     "tail_share": 0.433,
+     "buckets": {
+      "tail": 13,
+      "mid": 6,
+      "head": 11
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.833,
+     "relevant_tail_vec": 10,
+     "branch_accuracy_vec": 0.967,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 12,
+     "branch_accuracy_tag": 0.933
+    },
+    {
+     "id": "oasis-text-en",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 5,
+      "head": 13
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.8,
+     "relevant_tail_vec": 10,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.967,
+     "relevant_tail_tag": 12,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "oasis-hint",
+     "n": 30,
+     "tail_share": 0.333,
+     "buckets": {
+      "tail": 10,
+      "mid": 7,
+      "head": 13
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.6,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.933,
+     "relevant_tail_vec": 10,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.9,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 0.967
+    },
+    {
+     "id": "both-between",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 7,
+      "head": 11
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.6,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.867,
+     "relevant_tail_vec": 10,
+     "relevant_share_tag": 1.0,
+     "relevant_tail_tag": 12
+    },
+    {
+     "id": "both-psych-brit",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 6,
+      "head": 12
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.9,
+     "relevant_tail_vec": 10,
+     "relevant_share_tag": 0.967,
+     "relevant_tail_tag": 12
+    },
+    {
+     "id": "both-none",
+     "n": 30,
+     "tail_share": 0.4,
+     "buckets": {
+      "tail": 12,
+      "mid": 7,
+      "head": 11
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.667,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.9,
+     "relevant_tail_vec": 10,
+     "relevant_share_tag": 0.967,
+     "relevant_tail_tag": 12
+    },
+    {
+     "id": "explore-0.1",
+     "n": 30,
+     "tail_share": 0.233,
+     "buckets": {
+      "tail": 7,
+      "mid": 9,
+      "head": 14
+     },
+     "channels": {
+      "tail": 7,
+      "explore": 1,
+      "semantic": 16,
+      "rule": 6
+     },
+     "unique_artist_share": 0.5,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.9,
+     "relevant_tail_vec": 7,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.967,
+     "relevant_tail_tag": 7,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "explore-0.5",
+     "n": 30,
+     "tail_share": 0.367,
+     "buckets": {
+      "tail": 11,
+      "mid": 7,
+      "head": 12
+     },
+     "channels": {
+      "tail": 10,
+      "explore": 3,
+      "semantic": 11,
+      "rule": 6
+     },
+     "unique_artist_share": 0.567,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.833,
+     "relevant_tail_vec": 10,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.933,
+     "relevant_tail_tag": 10,
+     "branch_accuracy_tag": 1.0
+    },
+    {
+     "id": "explore-0.9",
+     "n": 30,
+     "tail_share": 0.5,
+     "buckets": {
+      "tail": 15,
+      "mid": 6,
+      "head": 9
+     },
+     "channels": {
+      "tail": 14,
+      "explore": 5,
+      "semantic": 5,
+      "rule": 6
+     },
+     "unique_artist_share": 0.667,
+     "traceable": true,
+     "evidence_valid": true,
+     "relevant_share_vec": 0.767,
+     "relevant_tail_vec": 12,
+     "branch_accuracy_vec": 1.0,
+     "relevant_share_tag": 0.867,
+     "relevant_tail_tag": 15,
+     "branch_accuracy_tag": 0.933
+    }
+   ]
+  }
+ },
+ "samples": {
+  "pf-text-zh": {
+   "rule_only": [
+    "[tail/tail] Roger Waters - Get Your Filthy Hands Off My Desert / Southampton Dock",
+    "[tail/tail] Spirit - It’s Time Now",
+    "[tail/tail] Spirit - Mega Star",
+    "[tail/tail] Porcupine Tree - Not Beautiful Anymore / Siren / Small Fish",
+    "[tail/tail] Hawkwind - Spiral Galaxy",
+    "[tail/tail] Hawkwind - Our Lives Can’t Last Forever",
+    "[tail/tail] Daevid Allen and Mother Gong - Unseen Ally",
+    "[tail/tail] Daevid Allen and Mother Gong - La dea madri",
+    "[tail/tail] Пикник и Вадим Самойлов - Теперь ты",
+    "[tail/tail] Пикник и Вадим Самойлов - Бисер у ног"
+   ],
+   "rag": [
+    "[tail/tail] Spirit - Love Tonight",
+    "[tail/tail] Spirit - Monkey See Monkey Do",
+    "[tail/tail] Hawkwind - What’s the Matter",
+    "[tail/tail] Hawkwind - Diamond Ring",
+    "[tail/tail] Gong - Red Alert",
+    "[tail/tail] King Crimson - Silent Night",
+    "[tail/tail] Gong - Percolations, Parts 1 & 2",
+    "[tail/tail] Procol Harum - Souvenir of London",
+    "[tail/tail] The Moody Blues - The Sunset",
+    "[tail/tail] Roger Waters - Get Your Filthy Hands Off My Desert / Southampton Dock"
+   ]
+  },
+  "pf-text-en": {
+   "rule_only": [
+    "[tail/tail] Yes - Don’t Take No for an Answer",
+    "[tail/tail] Yes - Ritual",
+    "[tail/tail] Gentle Giant - Features From Octopus",
+    "[tail/tail] Gentle Giant - Aspiration",
+    "[tail/tail] The Alan Parsons Project - Extract 1 From “The Alan Parsons Project Audio Guide”",
+    "[tail/tail] Nektar - Shangri-La",
+    "[tail/tail] Nektar - Summer Breeze",
+    "[tail/tail] Electric Light Orchestra - Losing You",
+    "[tail/tail] Marillion - Were There Postmen?",
+    "[tail/tail] Marillion - Born to End"
+   ],
+   "rag": [
+    "[tail/tail] King Crimson - Silent Night",
+    "[tail/tail] Procol Harum - Souvenir of London",
+    "[tail/tail] Spirit - Love Tonight",
+    "[tail/tail] Spirit - Monkey See Monkey Do",
+    "[tail/tail] Emerson, Lake & Palmer - Knife-Edge",
+    "[tail/tail] Rick Wakeman - The Maker",
+    "[tail/tail] King Crimson - Devil Dogs of Tessellation Row",
+    "[tail/tail] Пикник - Караван",
+    "[tail/tail] Yes - Don’t Take No for an Answer",
+    "[tail/tail] The Alan Parsons Project - The Turn of a Friendly Card: I. The Turn of a Friendly Card, Part One / II. Snake Eyes / III. The Ace of Swords / IV. Nothing Left to Lose / V. The Turn of a Friendly Card, Part Two"
+   ]
+  },
+  "pf-genre-zh": {
+   "rule_only": [
+    "[tail/tail] King Crimson - Krim 3",
+    "[tail/tail] King Crimson - Inner Garden (complete)",
+    "[tail/tail] Nektar - After the Fall",
+    "[tail/tail] Yes - Ritual",
+    "[tail/tail] Gentle Giant - Features From Octopus",
+    "[tail/tail] Gentle Giant - Aspiration",
+    "[tail/tail] The Alan Parsons Project - Extract 1 From “The Alan Parsons Project Audio Guide”",
+    "[tail/tail] Yes - Don’t Take No for an Answer",
+    "[tail/tail] Nektar - Shangri-La",
+    "[tail/tail] Пикник - Самый громкий крик - тишина"
+   ],
+   "rag": [
+    "[tail/tail] Steve Hackett - A Life in Movies",
+    "[tail/tail] Rick Wakeman - The Maker",
+    "[tail/tail] Procol Harum - Souvenir of London",
+    "[tail/tail] Rick Wakeman - The Lord’s Prayer",
+    "[tail/tail] Steve Hackett - The Chamber of 32 Doors",
+    "[tail/tail] The Alan Parsons Project - The Turn of a Friendly Card: I. The Turn of a Friendly Card, Part One / II. Snake Eyes / III. The Ace of Swords / IV. Nothing Left to Lose / V. The Turn of a Friendly Card, Part Two",
+    "[tail/tail] King Crimson - Silent Night",
+    "[tail/tail] Hawkwind - What’s the Matter",
+    "[tail/tail] Hawkwind - Diamond Ring",
+    "[tail/tail] Anthony Phillips - Rule Britannia Closing Theme (1981)"
+   ]
+  },
+  "pf-hint": {
+   "rule_only": [
+    "[tail/tail] Пикник и Вадим Самойлов - Теперь ты",
+    "[tail/tail] Пикник и Вадим Самойлов - Бисер у ног",
+    "[tail/tail] Gentle Giant - Band Intro",
+    "[tail/tail] King Crimson - Silent Night",
+    "[tail/tail] Yes - Ritual",
+    "[tail/tail] King Crimson - Devil Dogs of Tessellation Row",
+    "[tail/tail] Marillion - Living in F E A R",
+    "[tail/tail] Marillion - El Dorado: iii. Demolished Lives",
+    "[tail/tail] The Alan Parsons Project - Extract 1 From “The Alan Parsons Project Audio Guide”",
+    "[tail/tail] Nektar - After the Fall"
+   ],
+   "rag": [
+    "[tail/tail] Spirit - Love Tonight",
+    "[tail/tail] King Crimson - Silent Night",
+    "[tail/tail] Spirit - Monkey See Monkey Do",
+    "[tail/tail] Procol Harum - Souvenir of London",
+    "[tail/tail] Emerson, Lake & Palmer - Knife-Edge",
+    "[tail/tail] Rick Wakeman - The Maker",
+    "[tail/tail] The Alan Parsons Project - The Turn of a Friendly Card: I. The Turn of a Friendly Card, Part One / II. Snake Eyes / III. The Ace of Swords / IV. Nothing Left to Lose / V. The Turn of a Friendly Card, Part Two",
+    "[tail/tail] Rick Wakeman - The Lord’s Prayer",
+    "[tail/tail] Roger Waters - Get Your Filthy Hands Off My Desert / Southampton Dock",
+    "[tail/tail] Пикник - Караван"
+   ]
+  },
+  "oasis-text-zh": {
+   "rule_only": [
+    "[tail/tail] Cast - Love You Like I Do",
+    "[tail/tail] Cast - Time Is Like a River",
+    "[tail/tail] Shed Seven - If The Music Don't Move Yer",
+    "[tail/tail] Embrace - We Are It",
+    "[tail/tail] Shed Seven & Laura McClure - Tripping With You",
+    "[tail/tail] The La’s - That’ll Be the Day (BBC2 The Late Show Feb ’89)",
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] Paul Weller - Cosmic Fringes",
+    "[tail/tail] Paul Weller - Moving Canvas",
+    "[tail/tail] The Bluetones - Beat on the Brat"
+   ],
+   "rag": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Embrace - A Tap on Your Shoulder",
+    "[tail/tail] James - Wisdom of the Throat",
+    "[tail/tail] Dodgy - Live Break",
+    "[tail/tail] Dodgy - This Is Ours",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] The La’s - I Did the Painting",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] Mansun - Mansun’s Only Live Song"
+   ]
+  },
+  "oasis-text-en": {
+   "rule_only": [
+    "[tail/tail] The Pansies - Barely There",
+    "[tail/tail] The Pansies - Labels",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Shed Seven - If The Music Don't Move Yer",
+    "[tail/tail] Suede - What Am I Without You?",
+    "[tail/tail] Shed Seven & Laura McClure - Tripping With You",
+    "[tail/tail] Embrace - We Are It",
+    "[tail/tail] Suede - Chalk Circles",
+    "[tail/tail] Ocean Colour Scene - Me, I'm Left Unsure"
+   ],
+   "rag": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Subcircus - She Ain’t Heavy",
+    "[tail/tail] Subcircus - Shelley's on the Telephone",
+    "[tail/tail] Manic Street Preachers - If You Tolerate This",
+    "[tail/tail] Mansun - Mansun’s Only Live Song",
+    "[tail/tail] Dodgy - (Your Love Keeps Lifting Me) Higher and Higher",
+    "[tail/tail] Dodgy - Speaking in Tongues"
+   ]
+  },
+  "oasis-hint": {
+   "rule_only": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] Embrace - Today",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Suede - What Am I Without You?",
+    "[tail/tail] Suede - Chalk Circles",
+    "[tail/tail] Paul Weller - Baptiste",
+    "[tail/tail] Paul Weller - Walkin’",
+    "[tail/tail] Ocean Colour Scene - Me, I'm Left Unsure",
+    "[tail/tail] Shed Seven - The Eye in the Sky"
+   ],
+   "rag": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] James - Wisdom of the Throat",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] Embrace - A Tap on Your Shoulder",
+    "[tail/tail] Manic Street Preachers - If You Tolerate This",
+    "[tail/tail] Mansun - Mansun’s Only Live Song",
+    "[tail/tail] Dodgy - Live Break",
+    "[tail/tail] Dodgy - This Is Ours"
+   ]
+  },
+  "both-between": {
+   "rule_only": [
+    "[tail/tail] Mansun - An Open Letter to the Lyrical Trainspotter",
+    "[tail/tail] Mansun - Moronica",
+    "[tail/tail] Amplifier - Gateway",
+    "[tail/tail] Amplifier - Entity",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Yes - Ritual",
+    "[tail/tail] Liam Gallagher - Sad Song",
+    "[tail/tail] Liam Gallagher - Supersonic",
+    "[tail/tail] Пикник и Вадим Самойлов - Теперь ты"
+   ],
+   "rag": [
+    "[tail/tail] Mansun - Mansun’s Only Live Song",
+    "[tail/tail] Embrace - A Tap on Your Shoulder",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Embrace - I Know What's Going On",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] Procol Harum - Souvenir of London",
+    "[tail/tail] Spirit - Love Tonight",
+    "[tail/tail] Spirit - Monkey See Monkey Do",
+    "[tail/tail] Marillion - Goodbye to All That: (i) Wave / (ii) Mad / (iii) The Opium Den / (iv) The Slide / (v) Standing in the Swing"
+   ]
+  },
+  "both-psych-brit": {
+   "rule_only": [
+    "[tail/tail] Kula Shaker - Dead Crusader",
+    "[tail/tail] The Pansies - Barely There",
+    "[tail/tail] The Pansies - Labels",
+    "[tail/tail] Noel Gallagher’s High Flying Birds - God Help Us All",
+    "[tail/tail] Embrace - We Are It",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] James - Leviathan",
+    "[tail/tail] The Bluetones - Beat on the Brat"
+   ],
+   "rag": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Ride - Performance",
+    "[tail/tail] Mansun - Mansun’s Only Live Song",
+    "[tail/tail] Embrace - Happy and Lost",
+    "[tail/tail] James - Wisdom of the Throat",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] Subcircus - She Ain’t Heavy",
+    "[tail/tail] Subcircus - Shelley's on the Telephone",
+    "[tail/tail] The La’s - I Did the Painting"
+   ]
+  },
+  "both-none": {
+   "rule_only": [
+    "[tail/tail] Mansun - An Open Letter to the Lyrical Trainspotter",
+    "[tail/tail] Mansun - Moronica",
+    "[tail/tail] Amplifier - Gateway",
+    "[tail/tail] Amplifier - Entity",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Yes - Ritual",
+    "[tail/tail] Liam Gallagher - Sad Song",
+    "[tail/tail] Liam Gallagher - Supersonic",
+    "[tail/tail] Пикник и Вадим Самойлов - Теперь ты"
+   ],
+   "rag": [
+    "[tail/tail] Mansun - Mansun’s Only Live Song",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] King Crimson - Silent Night",
+    "[tail/tail] Spirit - Love Tonight",
+    "[tail/tail] Spirit - Monkey See Monkey Do",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] Procol Harum - Souvenir of London",
+    "[tail/tail] Uriah Heep - Wizard"
+   ]
+  },
+  "explore-0.1": {
+   "rule_only": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] Embrace - Today",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Suede - What Am I Without You?",
+    "[tail/tail] Suede - Chalk Circles",
+    "[tail/tail] Paul Weller - Baptiste",
+    "[explore/mid] Babybird - If You'll Be Mine",
+    "[rule/head] Oasis - Columbia",
+    "[rule/head] Oasis - Digsy’s Dinner"
+   ],
+   "rag": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] James - Wisdom of the Throat",
+    "[tail/tail] Embrace - A Tap on Your Shoulder",
+    "[tail/tail] Manic Street Preachers - If You Tolerate This",
+    "[explore/mid] Elbow - Strangeways to Holcombe Hill in 4.20",
+    "[semantic/head] Oasis - Supersonic",
+    "[semantic/head] Oasis - Digsy’s Dinner"
+   ]
+  },
+  "explore-0.5": {
+   "rule_only": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] Embrace - Today",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Suede - What Am I Without You?",
+    "[tail/tail] Suede - Chalk Circles",
+    "[tail/tail] Paul Weller - Baptiste",
+    "[tail/tail] Paul Weller - Walkin’",
+    "[tail/tail] Ocean Colour Scene - Me, I'm Left Unsure",
+    "[tail/tail] Shed Seven - The Eye in the Sky"
+   ],
+   "rag": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] James - Wisdom of the Throat",
+    "[tail/tail] Embrace - A Tap on Your Shoulder",
+    "[tail/tail] Manic Street Preachers - If You Tolerate This",
+    "[tail/tail] Mansun - Mansun’s Only Live Song",
+    "[tail/tail] Dodgy - Live Break",
+    "[tail/tail] Dodgy - This Is Ours"
+   ]
+  },
+  "explore-0.9": {
+   "rule_only": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] Embrace - Today",
+    "[tail/tail] Dodgy - You Give Drugs a Bad Name",
+    "[tail/tail] Dodgy - Are You the One",
+    "[tail/tail] Suede - What Am I Without You?",
+    "[tail/tail] Suede - Chalk Circles",
+    "[tail/tail] Paul Weller - Baptiste",
+    "[tail/tail] Paul Weller - Walkin’",
+    "[tail/tail] Ocean Colour Scene - Me, I'm Left Unsure",
+    "[tail/tail] Shed Seven - The Eye in the Sky"
+   ],
+   "rag": [
+    "[tail/tail] Embrace - If You Feel Like a Sinner",
+    "[tail/tail] James - Goal Goal Goal",
+    "[tail/tail] Ash - Wild Surf (extended)",
+    "[tail/tail] Supergrass - Sometimes We’re Very Sad",
+    "[tail/tail] James - Wisdom of the Throat",
+    "[tail/tail] Embrace - A Tap on Your Shoulder",
+    "[tail/tail] Manic Street Preachers - If You Tolerate This",
+    "[tail/tail] Mansun - Mansun’s Only Live Song",
+    "[tail/tail] Dodgy - Live Break",
+    "[tail/tail] Dodgy - This Is Ours"
+   ]
+  }
+ }
+}
