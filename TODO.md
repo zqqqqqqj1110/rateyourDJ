@@ -157,31 +157,33 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 需要完成：用户上下文
 
-- [ ] 初始化 `participant_001`；
-- [ ] 确认 Pink Floyd 与 Oasis 的具体种子歌曲；
-- [ ] 初始候选：`Time`、`Wish You Were Here`、`Shine On You Crazy Diamond`、`Live Forever`、`Slide Away`、`Champagne Supernova`；
-- [ ] 将 L1 收缩为轻量上下文：种子、已听/已推荐、排除项、探索强度和最近反馈；
-- [ ] 保留 `load_user_context(user_id)` 通用接口；
-- [ ] 流派、艺人和标签偏好按需计算，不维护重型手工画像；
+- [x] 初始化 `participant_001`；
+- [x] 确认 Pink Floyd 与 Oasis 的具体种子歌曲；
+- [x] 初始候选：`Time`、`Wish You Were Here`、`Shine On You Crazy Diamond`、`Live Forever`、`Slide Away`、`Champagne Supernova`；
+- [x] 将 L1 收缩为轻量上下文：种子、已听/已推荐、排除项、探索强度和最近反馈（`data/users/<id>/context.json`；现有 L6 推荐服务改读 V2 上下文放到阶段 2/3）；
+- [x] 保留 `load_user_context(user_id)` 通用接口；
+- [x] 流派、艺人和标签偏好按需计算，不维护重型手工画像；
 - [ ] 后续允许用该用户的网易云收藏扩充种子，第一版不依赖逆向登录接口。
 
 ### 需要完成：歌曲目录
 
-- [ ] 使用 MusicBrainz 构建曲库（recording/artist/release/tag），ListenBrainz 提供收听量和相似艺人/歌曲数据；
-- [ ] 曲库范围从两个兴趣分支出发扩展（相似艺人多跳），不导入全量 MusicBrainz；
+- [x] 使用 MusicBrainz 构建曲库（recording/artist/release/tag），ListenBrainz 提供收听量和相似艺人/歌曲数据；
+- [x] 曲库范围从两个兴趣分支出发扩展（相似艺人多跳），不导入全量 MusicBrainz；
+  - 决定（2026-09-27）：v1 维持种子扩展（相似艺人 2 跳 + 分支标签艺人，每个艺人前 10 首 + 分层抽 30 首冷门曲目）。已知局限：共同收听会带入风格较远的主流艺人，且相关性部分在建库时内置。后续可换成“按风格圈定、与用户无关的大曲库”（MusicBrainz 导出离线筛选），或在阶段 3 作为对照。
 - [ ] ListenBrainz 公开收听日志同时作为阶段 4/5 隐藏正样本来源（与训练 reward 严格隔离）；
-- [ ] 记录数据源版本、下载日期、许可和用途；
-- [ ] 实现 MusicBrainz 导入与字段标准化（优先用数据 dump，API 仅补缺，遵守 1 req/s 限速）；
-- [ ] 实现 ListenBrainz 收听量与相似度数据导入；
-- [ ] 扩展 `SongProfile`：外部 ID、音频特征、播放/收听数据、来源和许可；
-- [ ] 基于 ListenBrainz 收听量计算全局及流派内 popularity percentile；
-- [ ] 生成 `head`、`mid`、`tail` 分桶；
-- [ ] 内部 ID 与外部 URI 分离，解决冒号文件名校验冲突；
-- [ ] 为每首歌确定播放来源：head/mid 用 Spotify ID，tail 用 YouTube 链接；
-- [ ] YouTube 链接由 LLM API 联网搜索获得，必须经 YouTube oEmbed/Data API 校验视频存在且标题/艺人匹配，未通过则标为“无可播放链接”，不凑数；
-- [ ] 链接结果缓存到曲库，记录搜索时间和校验状态；
-- [ ] 输出缺失率、重复率、匹配率和分桶报告；
-- [ ] 原始数据、权重、用户隐私和索引不提交 Git。
+- [x] 记录数据源版本、下载日期、许可和用途；
+- [x] 实现 MusicBrainz 导入与字段标准化（API + 磁盘缓存，遵守 1 req/s 限速；dump 只用于全网热度抽样）；
+- [x] 实现 ListenBrainz 收听量与相似度数据导入；
+- [x] 扩展 `SongProfile`：外部 ID、播放/收听数据、来源和许可（音频特征不可得：Spotify 已不向新应用开放 audio-features，暂缺）；
+- [x] 基于 ListenBrainz 听众数计算全网（抽样估计）及流派内 popularity percentile；
+  - 决定（2026-09-27）：分档改为 `bucket-v2` = 全网前 1% head / 前 1–10% mid / 其余 tail（v1 的 10%/50% 使 tail 仅 0.3%）。
+- [x] 生成 `head`、`mid`、`tail` 分桶；
+- [x] 内部 ID 与外部 URI 分离，解决冒号文件名校验冲突；
+- [x] 为每首歌确定播放来源：head/mid 用 Spotify（ISRC 精确匹配优先），tail 用 YouTube 链接；按需解析（只解析要展示的歌），结果缓存；
+- [x] ~~YouTube 链接由 LLM API 联网搜索获得~~ 改为 YouTube Data API 搜索（每天 ≤ 95 次），经 `videos.list` 校验公开可嵌入且标题/艺人匹配，优先官方 Topic/艺人频道，未通过则标为“无可播放链接”，不凑数；
+- [x] 链接结果缓存到曲库，记录搜索时间和校验状态；
+- [x] 输出缺失率、重复率、匹配率和分桶报告；
+- [x] 原始数据、权重、用户隐私和索引不提交 Git。
 
 ### 本阶段不动
 
@@ -193,12 +195,12 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 完成标准
 
-- [ ] `participant_001` 可被现有服务读取；
-- [ ] Pink Floyd 与 Oasis 两条兴趣分支可区分；
-- [ ] 曲库可稳定导入并重复生成；
-- [ ] 每首可用歌曲具有来源和长尾分桶；
-- [ ] 旧 JSON 仍可读取；
-- [ ] L1/L2 新增测试通过。
+- [x] `participant_001` 可通过 `load_user_context` 读取（推荐服务接入见阶段 2/3）；
+- [x] Pink Floyd 与 Oasis 两条兴趣分支可区分；
+- [x] 曲库可稳定导入并重复生成；
+- [x] 每首可用歌曲具有来源和长尾分桶；
+- [x] 旧 JSON 仍可读取；
+- [x] L1/L2 新增测试通过。
 
 ## 6. 阶段 2：RAG 多路召回
 

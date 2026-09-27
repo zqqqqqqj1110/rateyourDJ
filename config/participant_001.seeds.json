@@ -1,0 +1,64 @@
+{
+  "user_id": "participant_001",
+  "exploration_level": 0.5,
+  "branches": [
+    {
+      "branch_id": "pink_floyd",
+      "label": "迷幻 / 前卫 / 艺术摇滚 / 氛围化",
+      "artist": "Pink Floyd",
+      "songs": [
+        {
+          "title": "Time"
+        },
+        {
+          "title": "Wish You Were Here"
+        },
+        {
+          "title": "Shine On You Crazy Diamond",
+          "parts": [
+            1,
+            5
+          ]
+        }
+      ],
+      "expansion_tags": [
+        "progressive rock",
+        "psychedelic rock",
+        "art rock",
+        "space rock"
+      ]
+    },
+    {
+      "branch_id": "oasis",
+      "label": "Britpop / 另类摇滚 / 旋律型吉他摇滚",
+      "artist": "Oasis",
+      "songs": [
+        {
+          "title": "Live Forever"
+        },
+        {
+          "title": "Slide Away"
+        },
+        {
+          "title": "Champagne Supernova"
+        }
+      ],
+      "expansion_tags": [
+        "britpop",
+        "madchester",
+        "alternative rock",
+        "jangle pop"
+      ]
+    }
+  ],
+  "expansion": {
+    "similar_hop1": 25,
+    "similar_hop2": 8,
+    "max_artists_per_branch": 300,
+    "tag_artists_per_tag": 60,
+    "top_recordings_per_artist": 10,
+    "deep_recordings_per_artist": 30,
+    "deep_min_listener_ratio": 0.001,
+    "deep_min_listeners": 10
+  }
+}

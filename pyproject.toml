@@ -31,6 +31,7 @@ rateyourdj-l7 = "rateyourdj.l7.cli:main"
 rateyourdj-train = "rateyourdj.training.cli:main"
 rateyourdj-web = "rateyourdj.web.app:main"
 rateyourdj-collect = "rateyourdj.collectors.cli:main"
+rateyourdj-catalog = "rateyourdj.data_pipeline.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

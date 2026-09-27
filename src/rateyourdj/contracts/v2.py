@@ -43,9 +43,12 @@ SCHEMA_VERSIONS = {
     "grpo_sample": "grpo-sample/v2",
 }
 
-BUCKET_VERSION = "bucket-v1"
-# global_percentile: 1.0 = most listened. head = top 10%, mid = 10–50%.
-BUCKET_THRESHOLDS = {"head": 0.90, "mid": 0.50}
+BUCKET_VERSION = "bucket-v2"
+# global_percentile: 1.0 = most listened, measured against ListenBrainz-wide listener
+# counts. bucket-v2 (2026-09-27): head = global top 1%, mid = top 1–10%, tail = rest.
+# (bucket-v1 used top 10% / 50%; with the real global distribution — half of all
+# listened recordings have <= 5 listeners — that left only 0.3% of the catalog as tail.)
+BUCKET_THRESHOLDS = {"head": 0.99, "mid": 0.90}
 BUCKETS = ("head", "mid", "tail", "unknown")
 CHANNELS = ("rule", "semantic", "tail", "explore")
 PLAYBACK_SOURCES = ("spotify", "youtube", "none")

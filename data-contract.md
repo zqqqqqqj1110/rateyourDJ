@@ -569,10 +569,11 @@ runs/<run_id>/manifest.json 每次实验的 run manifest（见 9.10）
     "listen_count": 1234567,
     "listener_count": 45678,
     "source": "listenbrainz",
+    "metric": "listener_count",
     "global_percentile": 0.998,
     "genre_percentile": {"progressive rock": 0.999},
     "bucket": "head",
-    "bucket_version": "bucket-v1",
+    "bucket_version": "bucket-v2",
     "computed_at": "2026-09-27T00:00:00Z"
   },
   "playback": {
@@ -590,12 +591,17 @@ runs/<run_id>/manifest.json 每次实验的 run manifest（见 9.10）
 }
 ```
 
-**冷门程度分档（`bucket-v1`）**
+**冷门程度分档（`bucket-v2`）**
 
-- 按 ListenBrainz `listen_count` 从高到低排，计算全局百分位 `global_percentile`（1.0 = 最热）；
-- `head`：前 10%；`mid`：10%–50%；`tail`：其余 50%；
+- 热度指标：ListenBrainz **听众数** `listener_count`（不用收听次数，避免被少数人循环播放放大）；
+- 参照范围：**ListenBrainz 全网**。ListenBrainz 不直接提供全网百分位，所以用抽样估计：从 MusicBrainz 核心导出 `mbdump.tar.bz2` 的录音表中均匀抽约 20 万个录音（排除视频），查它们的听众数，取**至少 1 个听众**的录音作为总体，得到经验分布，存为 `data/catalog/popularity_reference.json`；
+- `global_percentile` = 该歌听众数在总体中的中位秩（1.0 = 最热）；0 个听众记 0.0；
+- `head`：全网前 1%；`mid`：全网前 1%–10%；`tail`：其余（全网后 90%）；
+- 实测参照（MusicBrainz 导出 2026-09-23，抽样 20 万条中 93,234 条有听众）：head ≥ 3,735 个听众，mid ≥ 189，tail < 189；
+- 版本历史：`bucket-v1` 用全网前 10% / 50%，但全网一半有听众的录音只有 ≤ 5 个听众，曲库只剩 0.3% 为 tail，已弃用；
 - 没有 ListenBrainz 数据的歌记为 `unknown`，不算进长尾指标，单独报告数量；
-- 阈值属于 `bucket-v1`，改阈值必须升版本号，旧结果不重算。
+- `genre_percentile` 是在曲库内、同流派歌曲之间算的补充指标（同流派不足 20 首不算）；
+- 阈值、参照分布都属于分档版本，改任何一个都必须升版本号；原始听众数始终保留，换参照只需重算，不用重新采集。
 
 **播放来源规则**
 

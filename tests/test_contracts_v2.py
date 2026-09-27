@@ -51,12 +51,12 @@ class IdRulesTest(unittest.TestCase):
 
 
 class BucketTest(unittest.TestCase):
-    def test_thresholds_10_50(self):
-        self.assertEqual(assign_bucket(0.95), "head")
-        self.assertEqual(assign_bucket(0.90), "head")
-        self.assertEqual(assign_bucket(0.89), "mid")
-        self.assertEqual(assign_bucket(0.50), "mid")
-        self.assertEqual(assign_bucket(0.49), "tail")
+    def test_thresholds_bucket_v2_top1_top10(self):
+        self.assertEqual(assign_bucket(0.995), "head")
+        self.assertEqual(assign_bucket(0.99), "head")
+        self.assertEqual(assign_bucket(0.989), "mid")
+        self.assertEqual(assign_bucket(0.90), "mid")
+        self.assertEqual(assign_bucket(0.899), "tail")
         self.assertEqual(assign_bucket(None), "unknown")
 
     def test_percentile_ranks_handles_ties_and_missing(self):
@@ -74,7 +74,7 @@ class ValidatorTest(unittest.TestCase):
     def test_bucket_must_match_percentile(self):
         with self.assertRaises(ContractError):
             validate_record("song_profile", _song(popularity={
-                "global_percentile": 0.95, "bucket": "tail", "bucket_version": BUCKET_VERSION}))
+                "global_percentile": 0.995, "bucket": "tail", "bucket_version": BUCKET_VERSION}))
 
     def test_unverified_playback_is_rejected(self):
         with self.assertRaises(ContractError):
