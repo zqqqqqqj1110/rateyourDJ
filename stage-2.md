@@ -112,6 +112,38 @@ RAG 把知识放在外部库里（随时更新），回答基于检索到的资�
 | `evaluate.py` | 规则召回 vs RAG，向量 / 标签两个裁判，枢纽歌指标 |
 | `cli.py` | `rateyourdj-rag build-index / retrieve / eval` |
 
+### 流程图（每次推荐时的在线过程）
+
+```mermaid
+flowchart TD
+    Q["你的请求<br/>如：迷幻、有空间感"] --> V
+    S["种子歌<br/>6 首，两条分支"] --> V
+    V["查询向量<br/>兴趣中心 + 请求文本"]
+    I["曲库向量索引<br/>14,065 首（离线建好）"] --> D
+    V --> D["语义相似度<br/>bge-m3 余弦"]
+    V --> T["标签相似度<br/>风格标签重合"]
+    D --> H["混合相关性<br/>两者百分位各占一半"]
+    T --> H
+    H --> C1["长尾召回<br/>冷门且前 15%"]
+    H --> C2["探索召回<br/>相关性 60–85%"]
+    H --> C3["语义召回<br/>相关性最高"]
+    T --> C4["规则召回<br/>只看标签"]
+    C1 --> R["30 首候选<br/>去重 · 按名额 · 附证据"]
+    C2 --> R
+    C3 --> R
+    C4 --> R
+    R --> N["阶段 3：排序<br/>选出最终 10 首"]
+
+    classDef input fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    classDef done fill:#EEEDFE,stroke:#534AB7,color:#26215C
+    classDef next fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    class Q,S,I input
+    class V,D,T,H,C1,C2,C3,C4,R done
+    class N next
+```
+
+灰色：输入 / 离线数据；紫色：阶段 2（已完成）；青色：阶段 3（下一步）。规则召回只看标签相似度，其余三路按混合相关性挑歌。
+
 ### 流程
 
 1. **文档**：`A 1970s song by Hawkwind. Style: space rock, psychedelic rock, progressive rock.`
