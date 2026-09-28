@@ -197,3 +197,20 @@ class GRPORewardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrefillTest(unittest.TestCase):
+    def test_prefix_matches_the_chat_template_and_round_trips(self):
+        from rateyourdj.training.grpo_reward import parse_completion
+        from rateyourdj.training.grpo_train import SUBMIT_PREFIX, full_completion
+        args = {"summary": "s", "candidate_set_id": "cs_1", "message": "m",
+                "picks": [{"song_id": "s_1", "reason": "r", "evidence_refs": [0]}]}
+        rendered = "<tool_call>\n" + json.dumps({"name": "submit_recommendations", "arguments": args},
+                                                ensure_ascii=False) + "\n</tool_call>"
+        self.assertTrue(rendered.startswith(SUBMIT_PREFIX))
+        generated = rendered[len(SUBMIT_PREFIX):]           # what the policy writes after the prefill
+        self.assertEqual(parse_completion(full_completion(generated, True)), args)
+        # special tokens stripped by the decoder: still parsable
+        stripped = generated.replace("</tool_call>", "")
+        self.assertEqual(parse_completion(full_completion(stripped, True)), args)
+        self.assertEqual(full_completion(rendered, True), rendered)

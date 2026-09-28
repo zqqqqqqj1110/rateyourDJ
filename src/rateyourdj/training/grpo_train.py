@@ -36,7 +36,7 @@ class GRPORunConfig:
     temperature: float = 1.0
     max_completion_length: int = 1400
     max_prompt_length: int = 12288
-    learning_rate: float = 5e-6
+    learning_rate: float = 2e-5          # smoke run: 5e-6 barely moved the LoRA (KL ~1e-4 after 20 steps)
     beta: float = 0.02
     epochs: float = 1.0
     per_device_batch: int = 2
@@ -44,19 +44,33 @@ class GRPORunConfig:
     lora_r: int = 16
     lora_alpha: int = 32
     save_steps: int = 50
+    prefill: bool = True
     use_vllm: bool = True
     vllm_gpu_memory_utilization: float = 0.35
     seed: int = 20260928
 
 
-def render_prompts(tokenizer: Any, samples: list[dict[str, Any]]) -> list[dict[str, str]]:
+# The start of the submission turn exactly as the Qwen chat template renders a tool call. With
+# ``prefill`` the prompt ends with it, so every rollout is a submission: in the smoke run ~30% of
+# temperature-1 samples were a (legitimate, SFT-learned) ``rank_candidates`` call, which the
+# selection-step reward can only score as -1 - wasted rollouts that teach nothing about choosing.
+# At temperature 0 the SFT model always submits directly, so evaluation needs no prefill.
+SUBMIT_PREFIX = '<tool_call>\n{"name": "submit_recommendations", "arguments": '
+
+
+def render_prompts(tokenizer: Any, samples: list[dict[str, Any]], prefill: bool = False) -> list[dict[str, str]]:
     rows = []
     for s in samples:
         view = training_view(s)
         text = tokenizer.apply_chat_template(view["prompt"], tools=view["tools"], tokenize=False,
                                              add_generation_prompt=True)
-        rows.append({"prompt": text, "sample_id": s["sample_id"]})
+        rows.append({"prompt": text + (SUBMIT_PREFIX if prefill else ""), "sample_id": s["sample_id"]})
     return rows
+
+
+def full_completion(text: str, prefill: bool) -> str:
+    """The submission as the loop would see it (prefix re-attached when it was part of the prompt)."""
+    return SUBMIT_PREFIX + text if prefill and not text.lstrip().startswith("<tool_call>") else text
 
 
 def merge_adapter(base: str, adapter: str, out: str) -> None:  # pragma: no cover - needs weights
@@ -82,7 +96,7 @@ def run(cfg: GRPORunConfig) -> dict[str, Any]:  # pragma: no cover - needs a GPU
     samples = load_jsonl(Path(cfg.data_dir) / "train.jsonl", cfg.limit_train)
     by_id = {s["sample_id"]: training_view(s) for s in samples}
     tokenizer = AutoTokenizer.from_pretrained(cfg.sft_model)
-    dataset = Dataset.from_list(render_prompts(tokenizer, samples))
+    dataset = Dataset.from_list(render_prompts(tokenizer, samples, cfg.prefill))
     log_path = out / "rewards.jsonl"
     state = {"step": 0}
 
@@ -91,12 +105,14 @@ def run(cfg: GRPORunConfig) -> dict[str, Any]:  # pragma: no cover - needs a GPU
         with log_path.open("a", encoding="utf-8") as log:
             for text, sid in zip(completions, sample_id):
                 text = text if isinstance(text, str) else (text[0].get("content") or "")
+                text = full_completion(text, cfg.prefill)
                 r = score(text, by_id[sid])
                 rewards.append(float(r["reward"]))
                 log.write(json.dumps({"step": state["step"], "sample_id": sid, "reward": r["reward"],
                                       "valid": r["valid"], "error": r.get("error"),
                                       "components": r.get("components"), "tails": r.get("tails"),
-                                      "chars": len(text)}, ensure_ascii=False) + "\n")
+                                      "chars": len(text),
+                                      "head": None if r["valid"] else text[:240]}, ensure_ascii=False) + "\n")
         return rewards
 
     history: list[dict[str, Any]] = []
