@@ -52,6 +52,8 @@ class Toolbox:
                 "exploration_level": {"type": "number", "minimum": 0, "maximum": 1,
                                       "description": "0 = 熟悉相关，1 = 尽量探索"},
                 "limit": {"type": "integer", "minimum": 10, "maximum": 40},
+                "exclude_artists": {"type": "array", "items": {"type": "string"}, "maxItems": 10,
+                                    "description": "用户明确不要的艺人名（按曲库艺人名匹配），这些艺人的歌不会进入候选"},
             }, ["query"]),
             _fn("get_track_facts", "查看候选歌曲的曲库事实（标签、年份、听众数）。", {
                 "song_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
@@ -101,16 +103,49 @@ class Toolbox:
         e = args.get("exploration_level")
         if e is not None and not 0 <= float(e) <= 1:
             raise ValueError("exploration_level must be within [0, 1]")
+        diagnostics: list[str] = []
+        branch = self._check_branch(str(args.get("query") or ""), branch, diagnostics)
         limit = int(args.get("limit") or 30)
+        excluded_artists = [str(a) for a in (args.get("exclude_artists") or [])][:10]
+        excluded_ids = self.artist_song_ids(excluded_artists)
+        kwargs = {"exclude_song_ids": excluded_ids} if excluded_ids else {}
         result = self.retriever.retrieve(str(args.get("query") or ""), branch_hint=branch,
                                          exploration_level=None if e is None else float(e),
-                                         limit=max(10, min(40, limit)))
+                                         limit=max(10, min(40, limit)), **kwargs)
+        result["excluded_artists"] = excluded_artists
         self.candidate_sets[result["candidate_set_id"]] = result
+        if result["fallback"]:
+            diagnostics.append(f"fallback: {result['fallback']}")
         return envelope("retrieve_candidates", "ok" if result["fallback"] is None else "partial", {
             "candidate_set_id": result["candidate_set_id"],
             "exploration_level": result["query"]["exploration_level"],
-            "candidates": [compact(c) for c in result["candidates"]]},
-            [f"fallback: {result['fallback']}"] if result["fallback"] else [])
+            "candidates": [compact(c) for c in result["candidates"]]}, diagnostics)
+
+    def _check_branch(self, query: str, branch: str | None, diagnostics: list[str]) -> str | None:
+        """Guard: seed songs / seed artists named in the query decide the branch.
+
+        If the query names seeds of exactly one branch and the model passed another branch, the
+        named branch wins; if it names seeds of several branches, no single branch is forced.
+        (Stage 4 eval: "像 Champagne Supernova 那样宏大的歌" was sent with the wrong branch.)"""
+        resolve = getattr(self.retriever, "_resolve_references", None)
+        if branch is None or resolve is None or not query:
+            return branch
+        _, _, named = resolve(query)
+        if not named or branch in named and len(named) == 1:
+            return branch
+        corrected = next(iter(named)) if len(named) == 1 else None
+        diagnostics.append(f"branch_hint 已更正：请求点名的种子属于 {', '.join(sorted(named))}，"
+                           f"branch_hint 由 {branch} 改为 {corrected}")
+        return corrected
+
+    def artist_song_ids(self, names: list[str]) -> list[str]:
+        """Catalog songs credited to any of ``names`` (case-insensitive; exact credit or listed artist)."""
+        wanted = {n.strip().lower() for n in names if n and n.strip()}
+        if not wanted:
+            return []
+        return sorted(sid for sid, s in self.songs.items()
+                      if (s.get("artist_credit") or "").strip().lower() in wanted
+                      or any((a.get("name") or "").strip().lower() in wanted for a in s.get("artists", [])))
 
     def _tool_get_track_facts(self, args: dict[str, Any]) -> dict[str, Any]:
         allowed = {c["song_id"] for s in self.candidate_sets.values() for c in s["candidates"]}

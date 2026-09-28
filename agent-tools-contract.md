@@ -794,6 +794,7 @@ record_feedback        写 FeedbackV2
 | `branch_hint` | 可选：`null` 表示按请求自动判断或两条分支都用；取值必须是用户上下文里存在的 `branch_id` |
 | `exploration_level` | 可选，覆盖用户默认值 |
 | `channel_quota` | 可选，默认值由召回配置决定 |
+| `exclude_artists` | 可选（阶段 4 新增）：用户明确不要的艺人名，按曲库艺人名匹配，这些艺人的歌不进入候选。`query` 只写想要的内容，“不要某艺人”放在这里 |
 
 `data`：
 
@@ -808,6 +809,7 @@ record_feedback        写 FeedbackV2
 ```
 
 - 同一 `candidate_set_id` 可以复现，候选集会被缓存，供校验和训练样本引用；
+- `candidate_set_id` 由请求参数、索引和配置决定；用户上下文里的已听、已推荐、排除歌曲不为空时也计入（阶段 4 修正：此前上下文变化后同一 ID 会指向不同候选集）；
 - 没有向量索引时 `fallback: "rule_only"`，只返回标签召回结果，`status: "partial"`。
 
 ## V2.5 get_track_facts

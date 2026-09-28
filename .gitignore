@@ -27,3 +27,8 @@ runs/**/raw/
 
 # stage 2 retrieval artifacts
 data/candidates/
+
+# stage 4: model weights and transfer archives stay local
+runs/**/adapter/
+runs/**/checkpoints/
+*.tgz

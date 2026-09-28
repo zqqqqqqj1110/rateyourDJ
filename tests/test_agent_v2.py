@@ -207,3 +207,39 @@ class AgentLoopTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(numpy is None, "numpy not installed")
+class BranchGuardTest(unittest.TestCase):
+    def setUp(self):
+        self.songs, self.context = _catalog()
+        enc = HashingEncoder(1024)
+        self.tmp = tempfile.TemporaryDirectory()
+        index = build_index(self.songs, enc, catalog_version="c1", root=self.tmp.name, log=lambda *a: None)
+        self.retriever = Retriever(self.songs, self.context, index=index, encoder=enc, catalog_version="c1")
+        self.tb = Toolbox({s["song_id"]: s for s in self.songs}, self.context, self.retriever, count=5)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def branch_of(self, obs):
+        cs = self.tb.candidate_sets[obs["data"]["candidate_set_id"]]
+        return cs["query"]["branch_hint"]
+
+    def test_named_seed_overrides_conflicting_branch(self):
+        obs = self.tb.execute("retrieve_candidates", {"summary": "s", "query": "像 Live Forever 那样宏大的歌",
+                                                      "branch_hint": "pink_floyd"})
+        self.assertEqual(self.branch_of(obs), "oasis")
+        self.assertTrue(any("已更正" in d for d in obs["diagnostics"]))
+
+    def test_seeds_of_both_branches_clear_the_branch(self):
+        obs = self.tb.execute("retrieve_candidates", {"summary": "s", "query": "介于 Time 和 Live Forever 之间",
+                                                      "branch_hint": "oasis"})
+        self.assertIsNone(self.branch_of(obs))
+
+    def test_consistent_or_unnamed_branch_is_kept(self):
+        for query, branch in (("像 Time 那样", "pink_floyd"), ("space rock", "oasis"), ("", "oasis")):
+            obs = self.tb.execute("retrieve_candidates", {"summary": "s", "query": query, "branch_hint": branch})
+            self.assertEqual(self.branch_of(obs), branch)
+            self.assertEqual(obs["diagnostics"], [])
+

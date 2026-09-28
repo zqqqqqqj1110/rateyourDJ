@@ -1,0 +1,65 @@
+{
+  "config": {
+    "base_model": "/root/autodl-tmp/models/Qwen3-4B-Instruct-2507",
+    "batch_size": 1,
+    "data_dir": "data/training/sft/sft-v1",
+    "epochs": 1.0,
+    "eval_steps": 100,
+    "grad_accum": 8,
+    "gradient_checkpointing": true,
+    "learning_rate": 0.0001,
+    "limit_train": null,
+    "limit_val": 200,
+    "lora_alpha": 64,
+    "lora_dropout": 0.05,
+    "lora_r": 32,
+    "max_len": 12288,
+    "output_dir": "runs/sft-v1",
+    "seed": 20260927,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "warmup_ratio": 0.05
+  },
+  "created_at": "2026-09-27T19:25:03+00:00",
+  "data": {
+    "data/training/sft/sft-v1/split_manifest.json": "5f2fe0465aa73e392ebb9a96f419b7ae47b738c52940da72eb5fd19e78e26a0c",
+    "data/training/sft/sft-v1/train.jsonl": "7a1e06ededc0f0451d8a0d72b1413dfc755dc2dc1377fff391bb0f98b5712c29",
+    "data/training/sft/sft-v1/val.jsonl": "ce037030e3f79a37d6ad2e2899ed9b3bb51e74b3f481b5646cac3bdd0b26dbee"
+  },
+  "environment": {
+    "platform": "Linux-5.15.0-94-generic-x86_64-with-glibc2.35",
+    "python": "3.12.3"
+  },
+  "git": {
+    "commit": null,
+    "dirty": null
+  },
+  "kind": "sft_lora",
+  "metrics": {
+    "best_checkpoint": "runs/sft-v1/checkpoints/checkpoint-800",
+    "dropped": {
+      "train": 0,
+      "val": 0
+    },
+    "final_eval_loss": 0.026402229443192482,
+    "minutes": 272.6,
+    "peak_gpu_gb": 13.8,
+    "train_samples": 6436,
+    "val_samples": 200
+  },
+  "model": {
+    "adapter": "runs/sft-v1/adapter",
+    "base": "/root/autodl-tmp/models/Qwen3-4B-Instruct-2507"
+  },
+  "notes": "",
+  "run_id": "sft-v1",
+  "schema_version": "run-manifest/v1",
+  "seed": 20260927
+}

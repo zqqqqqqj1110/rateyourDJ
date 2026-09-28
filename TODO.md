@@ -462,31 +462,40 @@ participant_001 的种子歌曲 + 当前文本请求
 - SFT schema、生成器、校验器和评估脚本
 - L6 开放权重模型 provider
 
+> 决定（2026-09-27）：
+> - 基座模型 `Qwen/Qwen3-4B-Instruct-2507`（Apache 2.0，非思考版，原生 tool calling；略超 3B，但 32GB 显存可做 bf16 LoRA，不需要量化）；冒烟用 `Qwen3-1.7B`；
+> - 训练机：AutoDL RTX 5090 D 32GB（需 PyTorch ≥ 2.7 / CUDA ≥ 12.8 镜像）；推理评估用 vLLM（OpenAI 兼容接口，改 `AGENT_LLM_*` 即可替换 DeepSeek）；
+> - 数据：oracle 程序生成为主，DeepSeek 只改写请求模板；
+> - 划分改为按“说法 + 候选艺人”隔离（单用户下无法按种子艺人隔离），见 data-contract 9.9。
+
 ### 需要完成：数据
 
-- [ ] 选择许可允许研究和衍生训练的 0.5B-3B 中文/多语言模型；
-- [ ] 将 SFT 数据改为 chat/tool-call 格式；
-- [ ] 覆盖意图解析、检索调用、候选选择、证据解释和错误修正；
-- [ ] 生成偏 Pink Floyd、偏 Oasis、交集、排除条件和不同探索强度场景；
-- [ ] 标准答案主要由阶段 3 的规则/oracle 产生；
-- [ ] 强模型只辅助请求改写，不负责定义正确歌曲；
-- [ ] 校验候选 ID、数量、约束和 evidence；
-- [ ] 按场景和艺术家隔离 train/validation/test；
-- [ ] 验证/测试集的隐藏正样本来自 ListenBrainz/MSD 中与 `participant_001` 口味相近用户的真实收听日志；
-- [ ] 人工抽查至少 300 条；
-- [ ] 第一版目标 8,000-10,000 条高质量样本。
+- [x] 选择许可允许研究和衍生训练的中文/多语言模型（Qwen3-4B-Instruct-2507，见上）；
+- [x] 将 SFT 数据改为 chat/tool-call 格式（OpenAI 格式，含 `tools`；system/user 与推理逐字一致）；
+- [x] 覆盖意图解析、检索调用、候选选择、证据解释和错误修正（`get_user_context` / `rank_candidates` / repair 样本）；
+- [x] 生成偏 Pink Floyd、偏 Oasis、交集、排除条件和不同探索强度场景（23 个请求模板 × 探索强度 × 数量 × 排除 × 续推）；
+- [x] 标准答案主要由阶段 3 的规则/oracle 产生（`oracle-v1` = `rag-tailmix-v1` + 证据模板理由）；
+- [x] 强模型只辅助请求改写，不负责定义正确歌曲（`paraphrase` 命令，只改写模板，占位符必须保留）；
+- [x] 校验候选 ID、数量、约束和 evidence（每条样本独立复查，理由中的数字必须来自所引证据）；
+- [x] 按说法和候选艺术家隔离 train/validation/test（`split-v1`）；
+- [x] 在 Mac 上用 bge-m3 生成 500 条冒烟数据并抽查；
+- [ ] ~~验证/测试集的隐藏正样本来自 ListenBrainz/MSD 中与 `participant_001` 口味相近用户的真实收听日志~~ → 移到阶段 5（那里用于 checkpoint 选择）；阶段 4 用 oracle 对比 + 阶段 3 的 `weak-pos-v1`；
+- [x] ~~人工抽查至少 300 条~~ 决定（2026-09-28）不做：每条样本都经程序独立复查，模型评估也未发现数据问题；冒烟阶段的人工查看已发现并修正了热门歌集中和改写数量词问题；
+- [x] 第一版目标 8,000-10,000 条高质量样本（`sft-v1`：train 6,436 / val 756 / test 821）。
 
 ### 需要完成：训练与评估
 
-- [ ] 支持 QLoRA，锁定依赖、量化配置和 target modules；
-- [ ] 先用小模型和 500 条数据 smoke run；
-- [ ] 执行正式 SFT；
-- [ ] 保存 adapter、tokenizer、配置、曲线和 run manifest；
-- [ ] 增加兼容 OpenAI 协议的自托管 provider；
-- [ ] 保留 DeepSeek 和 rule provider；
-- [ ] 比较 base model 与 SFT-LoRA；
-- [ ] 评估工具准确率、JSON 合法率、候选外歌曲率、约束和 evidence；
-- [ ] 检查两个兴趣分支是否模式坍塌。
+- [x] ~~支持 QLoRA~~ 改为 bf16 LoRA（32GB 显存够用，不需要量化）；锁定依赖下限和 target modules（全部线性层）；只对 weight ≠ 0 的 assistant 消息计算损失（`training/sft_lora.py`）；
+- [x] 在线评估脚本：重建工具环境后跑真实 ReAct 循环，对比 oracle（`training/sft_eval.py`）；服务器脚本 `scripts/pack_for_gpu.sh`、`scripts/gpu_sft.sh`；
+- [x] 先用 500 条数据 smoke run（改为直接用 Qwen3-4B-Instruct-2507：1.7B 是思考/非思考混合版，聊天模板难以与推理对齐）；结果见 stage-4.md 第五节：参数与协议大幅提升，但首次提交的约束错误变多 → 检索每艺人上限改为 2、加大 15 首与改错样本比例；
+- [x] 执行正式 SFT（6,436 条，1 epoch，805 步，4.5 小时，验证 loss 0.026）；
+- [x] 保存 adapter、tokenizer、配置、曲线和 run manifest（`runs/sft-v1/`，adapter 不进 Git）；
+- [x] 增加兼容 OpenAI 协议的自托管 provider（vLLM + `AGENT_LLM_*`，无需改代码）；
+- [x] 保留 DeepSeek 和 rule provider；
+- [x] 比较 base model 与 SFT-LoRA（`runs/sft-eval-{base,lora}-v1/`）；
+- [x] 评估工具准确率、JSON 合法率、候选外歌曲率、约束和 evidence；
+- [x] 检查两个兴趣分支是否模式坍塌（按单分支 / 两分支 / 无内容 / 固定查询分组，见 stage-4.md）；
+- [x] 检索加分支守卫：请求点名的种子决定分支，与模型传的分支矛盾时以点名为准（修正“像 Champagne Supernova”被判到 pink_floyd）。
 
 ### 本阶段不动
 
@@ -498,10 +507,10 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 完成标准
 
-- [ ] SFT-LoRA 在冻结测试集上优于 base model；
-- [ ] 候选集外推荐率保持为 0；
-- [ ] 工具、格式、约束和 evidence 指标达到阈值；
-- [ ] SFT checkpoint 可被阶段 5 加载。
+- [x] SFT-LoRA 在冻结测试集上优于 base model（事先登记的门槛全部达到，见 stage-4.md 第六、九节）；
+- [x] 候选集外推荐率保持为 0；
+- [x] 工具、格式、约束和 evidence 指标达到阈值；
+- [x] SFT checkpoint 可被阶段 5 加载（adapter 已由 vLLM 加载并完成评估）。
 
 ## 9. 阶段 5：GRPO
 
@@ -521,7 +530,7 @@ participant_001 的种子歌曲 + 当前文本请求
 - [ ] GRPO 样本改为 `user_context + request + candidates + constraints + hidden positives`；
 - [ ] prompt 不包含唯一标准输出；
 - [ ] 围绕一个用户构造多种场景，不把场景数量描述成独立用户数；
-- [ ] 隐藏正样本来自 ListenBrainz/MSD 中与 `participant_001` 口味相近用户的真实收听日志；
+- [ ] 隐藏正样本来自 ListenBrainz/MSD 中与 `participant_001` 口味相近用户的真实收听日志（阶段 4 顺延至此）；
 - [ ] 隐藏正样本严格不进入 reward 计算，只用于验证集、测试集和 checkpoint 选择；
 - [ ] 用 ListenBrainz 中 tail 分桶歌曲构造长尾任务；
 - [ ] 第一版目标 2,000-3,000 个 prompt，每个 20-30 个候选；

@@ -50,7 +50,8 @@ DEFAULTS = {
     "min_tail_relevance": 0.85,      # tail songs must be in the top 15% by relevance
     "explore_band": (0.60, 0.85),    # explore: related but not the obvious picks
     "artist_cap_per_channel": 2,
-    "artist_cap_total": 3,
+    "artist_cap_total": 2,           # = the selection cap (max 2 per artist), so a candidate set can
+                                     # never tempt the agent into an artist-cap violation (stage 4)
     "text_weight": 0.5,              # query = 0.5 * request text + 0.5 * interest centre
     "reference_weight": 0.35,        # when seeds are named: 0.35 text + 0.35 named seeds + 0.3 centre
     "dense_weight": 0.5,             # hybrid relevance = 0.5 dense percentile + 0.5 tag percentile
@@ -293,11 +294,15 @@ class Retriever:
         ranks = {name: {r: i for i, r in enumerate(lst[: max(depth, quota[name] * 3)])}
                  for name, lst in channels.items()}
         raw = {"semantic": base, "tail": base, "explore": base, "rule": rule_scores}
-        candidate_set_id = "cs_" + hashlib.sha1(json.dumps({
+        id_parts = {
             "q": query, "b": branch_hint, "e": round(float(e), 3), "l": limit,
             "x": sorted(exclude_song_ids), "i": self.index.version if self.index else None,
-            "c": self.catalog_version, "cfg": {k: v for k, v in cfg.items()}}, sort_keys=True,
-            default=str).encode()).hexdigest()[:12]
+            "c": self.catalog_version, "cfg": {k: v for k, v in cfg.items()}}
+        context_excluded = (excluded - set(self.seed_ids) - set(exclude_song_ids)) | banned_artists
+        if context_excluded:  # heard / recommended / excluded songs change the set -> part of its id
+            id_parts["ctx"] = hashlib.sha1("|".join(sorted(context_excluded)).encode()).hexdigest()[:16]
+        candidate_set_id = "cs_" + hashlib.sha1(json.dumps(id_parts, sort_keys=True,
+                                                           default=str).encode()).hexdigest()[:12]
         request_id = "req_" + candidate_set_id[3:]
 
         candidates = []

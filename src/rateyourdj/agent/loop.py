@@ -32,7 +32,7 @@ SYSTEM_PROMPT = """你是 rateyourDJ，一个音乐推荐 Agent：在用户熟�
    本次探索强度 {exploration}：tail 歌曲的目标数量是 {tail_low}–{tail_high} 首，其余优先选与口味最相关的熟悉歌曲（head / mid）。
 3. 每首的 reason 只能依据该歌曲的 evidence，并用 evidence_refs 引用证据下标；不要编造证据里没有的事实（年份、专辑、故事等）。
 4. 每次调用工具都在 summary 里用一句话说明这一步的决定，不要写长篇推理。
-5. 用户提到的风格、年代、情绪、排除要求要体现在检索参数（query / branch_hint / exploration_level）或最终选择里。
+5. 用户提到的风格、年代、情绪、排除要求要体现在检索参数（query / branch_hint / exploration_level / exclude_artists）或最终选择里；query 只写想要的内容，不要把“不要某艺人”写进 query，而是放进 exclude_artists。
 6. message 用中文，一两句话介绍这批推荐。
 
 建议流程：retrieve_candidates →（需要时 get_track_facts 或 rank_candidates）→ submit_recommendations。"""
@@ -44,15 +44,8 @@ def run_agent(llm: ChatModel, toolbox: Toolbox, *, request_text: str, count: int
     started = time.perf_counter()
     e = toolbox.context.get("exploration_level", 0.5) if exploration_level is None else exploration_level
     min_tail = slot_plan(count, e)["tail"]
-    branches = ", ".join(toolbox.branch_ids)
-    user = (f"用户请求：{request_text.strip() or '（没有具体请求，按我的口味推荐）'}\n"
-            f"需要 {count} 首；探索强度 {e}；兴趣分支：{branches}"
-            + (f"；用户指定分支：{branch_hint}" if branch_hint else ""))
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(
-            count=count, min_tail=min_tail, max_per_artist=toolbox.max_per_artist, exploration=e,
-            tail_low=tail_target(count, e)[0], tail_high=tail_target(count, e)[1])},
-        {"role": "user", "content": user}]
+    messages = build_messages(toolbox, request_text=request_text, count=count, exploration_level=e,
+                              branch_hint=branch_hint)
     tools = toolbox.schemas()
     steps: list[dict[str, Any]] = []
     repairs = nudges = 0
@@ -120,9 +113,7 @@ def run_agent(llm: ChatModel, toolbox: Toolbox, *, request_text: str, count: int
                         last_set = cs or last_set
                         return fallback("invalid selection: " + "; ".join(report["errors"][:3]))
                     repairs += 1
-                    obs = {"tool": name, "status": "error",
-                           "diagnostics": ["选择未通过校验，请按下面的要求修改后重新提交 submit_recommendations：",
-                                           *repair_hints(report, args.get("picks") or [], cs, toolbox.max_per_artist)]}
+                    obs = repair_observation(report, args.get("picks") or [], cs, toolbox.max_per_artist)
                 else:
                     obs = toolbox.execute(name, args)
                     if name == "retrieve_candidates" and obs["status"] != "error":
@@ -134,6 +125,31 @@ def run_agent(llm: ChatModel, toolbox: Toolbox, *, request_text: str, count: int
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "content": json.dumps(obs, ensure_ascii=False)})
     return fallback(f"step budget exhausted ({max_steps})")
+
+
+def build_messages(toolbox: Toolbox, *, request_text: str, count: int, exploration_level: float,
+                   branch_hint: str | None = None) -> list[dict[str, Any]]:
+    """System + user messages exactly as the agent sees them (shared with SFT data generation)."""
+    e = exploration_level
+    min_tail = slot_plan(count, e)["tail"]
+    branches = ", ".join(toolbox.branch_ids)
+    user = (f"用户请求：{request_text.strip() or '（没有具体请求，按我的口味推荐）'}\n"
+            f"需要 {count} 首；探索强度 {e}；兴趣分支：{branches}"
+            + (f"；用户指定分支：{branch_hint}" if branch_hint else ""))
+    low, high = tail_target(count, e)
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT.format(
+            count=count, min_tail=min_tail, max_per_artist=toolbox.max_per_artist, exploration=e,
+            tail_low=low, tail_high=high)},
+        {"role": "user", "content": user}]
+
+
+def repair_observation(report: dict[str, Any], picks: list[Any], candidate_set: dict[str, Any] | None,
+                       max_per_artist: int) -> dict[str, Any]:
+    """The tool observation returned for an invalid submission (shared with SFT data generation)."""
+    return {"tool": "submit_recommendations", "status": "error",
+            "diagnostics": ["选择未通过校验，请按下面的要求修改后重新提交 submit_recommendations：",
+                            *repair_hints(report, picks, candidate_set, max_per_artist)]}
 
 
 def repair_hints(report: dict[str, Any], picks: list[Any], candidate_set: dict[str, Any] | None,
@@ -150,10 +166,7 @@ def repair_hints(report: dict[str, Any], picks: list[Any], candidate_set: dict[s
             counts[a] = counts.get(a, 0) + 1
 
     def alternatives(n: int, tail_only: bool = False) -> str:
-        options = [c for c in sorted(candidate_set["candidates"], key=lambda c: -c["relevance"])
-                   if c["song_id"] not in chosen
-                   and counts.get((c.get("artist_credit") or "").strip().lower(), 0) < max_per_artist
-                   and (not tail_only or c["bucket"] == "tail")][: max(3, n + 2)]
+        options = repair_alternatives(candidate_set, chosen, counts, max_per_artist, n, tail_only)
         return "；".join(f"{c['song_id']}（{c.get('artist_credit')} - {c.get('title')}，{c['bucket']}）"
                         for c in options) or "无"
 
@@ -180,6 +193,15 @@ def repair_hints(report: dict[str, Any], picks: list[Any], candidate_set: dict[s
         elif kind == "empty_reason":
             hints.append(f"{v['song_id']} 缺少 reason")
     return hints or report.get("errors", [])[:8]
+
+
+def repair_alternatives(candidate_set: dict[str, Any], chosen: set[str], artist_counts: dict[str, int],
+                        max_per_artist: int, n: int, tail_only: bool = False) -> list[dict[str, Any]]:
+    """Replacement candidates offered in repair hints: most relevant first, not chosen, artist not full."""
+    return [c for c in sorted(candidate_set["candidates"], key=lambda c: -c["relevance"])
+            if c["song_id"] not in chosen
+            and artist_counts.get((c.get("artist_credit") or "").strip().lower(), 0) < max_per_artist
+            and (not tail_only or c["bucket"] == "tail")][: max(3, n + 2)]
 
 
 def tail_target(count: int, exploration: float) -> tuple[int, int]:

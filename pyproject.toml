@@ -16,12 +16,12 @@ rag = [
     "sentence-transformers>=3.0",
 ]
 training = [
-    "torch>=2.2",
-    "transformers>=4.44",
-    "trl>=0.11",
-    "peft>=0.12",
+    "torch>=2.7",            # RTX 50xx (Blackwell, sm_120) needs CUDA >= 12.8 builds
+    "transformers>=4.51",    # Qwen3
+    "peft>=0.15",
+    "accelerate>=1.0",
+    "trl>=0.11",             # legacy GRPO entry point (stage 5 will replace it)
     "datasets>=2.20",
-    "accelerate>=0.33",
 ]
 
 [project.scripts]

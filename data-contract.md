@@ -705,29 +705,37 @@ YouTube 链接由 LLM API 联网搜索得到，必须用 YouTube oEmbed 或 Data
 
 ## 9.7 SFT 样本
 
-Chat / tool-call 格式，**不包含隐藏思维过程**（没有 `thought` 字段）。
+OpenAI chat / tool-call 格式（vLLM 与 Qwen 的聊天模板直接可用），**不包含隐藏思维过程**（没有 `thought` 字段）。一条样本就是一次完整执行过的 agent 轨迹，system / user 消息由 `agent.loop.build_messages` 生成，与推理时逐字相同；工具返回是真实工具的输出。
 
 ```json
 {
   "schema_version": "sft-sample/v2",
   "sample_id": "sft_…",
+  "tools": ["…Toolbox.schemas()，与推理时相同…"],
   "messages": [
-    {"role": "system", "content": "你是 rateyourDJ……只能从候选集中选歌……"},
-    {"role": "user", "content": "来点像 Wish You Were Here 但更冷门的"},
-    {"role": "assistant", "tool_calls": [{"name": "retrieve_candidates", "arguments": {"branch_hint": "pink_floyd", "exploration_level": 0.7}}]},
-    {"role": "tool", "name": "retrieve_candidates", "content": "{…RetrievalCandidateV2 列表…}"},
-    {"role": "assistant", "content": "{\"picks\": [{\"song_id\": \"s_…\", \"reason\": \"…\", \"evidence_refs\": [0, 1]}]}"}
+    {"role": "system", "content": "你是 rateyourDJ……"},
+    {"role": "user", "content": "用户请求：来点像《Time》那样的歌\n需要 10 首；探索强度 0.5；兴趣分支：pink_floyd, oasis"},
+    {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function",
+      "function": {"name": "retrieve_candidates", "arguments": "{\"summary\": \"请求点名了《Time》……\", \"query\": \"像 Time 那样的歌\", \"branch_hint\": \"pink_floyd\", \"exploration_level\": 0.5}"}}]},
+    {"role": "tool", "tool_call_id": "call_1", "name": "retrieve_candidates", "content": "{…真实工具输出…}"},
+    {"role": "assistant", "content": "", "weight": 0, "tool_calls": ["…故意出错的提交（只在 repair 样本中）…"]},
+    {"role": "tool", "tool_call_id": "call_2", "name": "submit_recommendations", "content": "{…校验器的修改要求…}"},
+    {"role": "assistant", "content": "", "tool_calls": ["…submit_recommendations：picks / message / summary…"]}
   ],
   "meta": {
-    "scenario": "branch_pink_floyd_tail",
-    "branch": "pink_floyd",
-    "exploration_level": 0.7,
-    "candidate_set_id": "cs_…",
-    "oracle_version": "oracle-v1",
+    "template_id": "S01", "mode": "single", "lang": "zh", "kind": "direct | ranked | repair",
+    "branch_hint": "pink_floyd", "exploration_level": 0.5, "count": 10, "exclude_artists": [],
+    "candidate_set_id": "cs_…", "min_tail": 3, "tail_picks": 4,
+    "oracle_version": "oracle-v1", "data_version": "sft-data-v1", "split_version": "split-v1",
     "split": "train"
   }
 }
 ```
+
+- 最后一条消息永远是 `submit_recommendations`（校验通过即结束，与推理循环一致）；
+- `weight: 0` 的 assistant 消息不计入训练损失，只作为上下文（repair 样本里故意出错的那次提交）；
+- 标准答案由确定性 oracle（`rag-tailmix-v1`）给出，理由只用证据模板生成，理由里的数字必须出现在所引用的证据中；
+- 生成代码：`src/rateyourdj/training/sft_data.py`、`sft_scenarios.py`。
 
 ## 9.8 GRPO 样本
 
@@ -754,7 +762,10 @@ Chat / tool-call 格式，**不包含隐藏思维过程**（没有 `thought` 字
 
 ## 9.9 数据集划分
 
-- train / val / test 按 **场景 + 艺人** 隔离：测试集里的种子艺人和目标艺人不出现在训练集；
+- train / val / test 按 **说法 + 候选艺人** 隔离（`split-v1`，阶段 4 修订：只有一个用户，种子艺人在所有 split 中都相同，无法按种子隔离）：
+  - 说法：部分请求模板（及其改写）只用于 val / test；
+  - 候选艺人：约 15% 的非种子艺人被保留，从所有 train 样本的召回里移除，训练时模型从未见过、也从未选过它们；
+  - 阶段 3 的 13 条固定查询只进 test；
 - 按 `candidate_set_id` 固定候选集，同一候选集只属于一个 split；
 - 固定 seed，划分结果写入 `data/training/<kind>/split_manifest.json`；
 - `phase: "final"` 的反馈永远不进任何 split；

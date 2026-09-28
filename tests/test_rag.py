@@ -186,9 +186,14 @@ class RetrieverTest(unittest.TestCase):
                     "expect": "pink_floyd"},
                    {"id": "oasis-hint", "text": "", "branch_hint": "oasis", "exploration": 0.5,
                     "expect": "oasis"}]
-        rule = Retriever(self.songs, self.context, index=None, catalog_version="c1")
+        # the toy catalog has 8 artists x 5 songs per branch: with the production cap of 2 songs per
+        # artist a 30-song set must borrow from the other branch, so allow 3 here (as in stage 2)
+        cfg = {"artist_cap_total": 3}
+        rule = Retriever(self.songs, self.context, index=None, catalog_version="c1", config=cfg)
+        rag = Retriever(self.songs, self.context, index=self.index, encoder=self.enc, catalog_version="c1",
+                        config=cfg)
         seed_ids = {s for b in self.context["seed_branches"] for s in b["seed_song_ids"]}
-        report = run_evaluation(queries, {"rule_only": rule, "rag": self.r}, Judges(self.r),
+        report = run_evaluation(queries, {"rule_only": rule, "rag": rag}, Judges(rag),
                                 {s["song_id"]: s for s in self.songs}, seed_ids)
         for name in ("rule_only", "rag"):
             system = report["systems"][name]
