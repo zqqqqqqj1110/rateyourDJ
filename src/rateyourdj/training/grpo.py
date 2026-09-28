@@ -1,4 +1,8 @@
-"""GRPO (Group-Relative Policy Optimization) on agent trajectories.
+"""LEGACY (pre-stage 5) GRPO entry point - kept only so old imports fail loudly.
+
+The stage 5 GRPO lives in grpo_data.py / grpo_reward.py / grpo_train.py / grpo_eval.py.
+
+GRPO (Group-Relative Policy Optimization) on agent trajectories.
 
 GRPO improves a policy using the *relative* reward of multiple responses to the
 same prompt, where reward comes from real user feedback (play/like/skip/save…).
@@ -80,79 +84,12 @@ def _require_training_deps() -> dict[str, Any]:
     }
 
 
-def build_reward_table(groups: list[dict[str, Any]]) -> dict[str, float]:
-    """Map response text -> recorded reward, from GRPO group samples."""
-    table: dict[str, float] = {}
-    for group in groups:
-        responses = group.get("responses", [])
-        rewards = group.get("rewards", [])
-        for response, reward in zip(responses, rewards):
-            if isinstance(response, str) and _is_number(reward):
-                # Keep the strongest signal if a response repeats.
-                table[response] = max(table.get(response, float(reward)), float(reward))
-    return table
-
-
 def run_grpo(config: GRPOConfig) -> dict[str, Any]:
-    """Run a GRPO training loop. Requires the [training] extras + a GPU."""
-    if not Path(config.train_file).exists():
-        raise FileNotFoundError(
-            f"GRPO train file not found: {config.train_file}. "
-            "Build it first with: rateyourdj-train build-grpo"
-        )
-    from .dataset import load_jsonl
-
-    groups = load_jsonl(config.train_file)
-    if not groups:
-        raise ValueError(
-            "GRPO train file has no groups; collect more feedback-bearing "
-            "trajectories or lower --min-group-size when building."
-        )
-    deps = _require_training_deps()
-
-    reward_table = build_reward_table(groups)
-    prompts = [{"prompt": group["prompt"]} for group in groups if group.get("prompt")]
-    dataset = deps["Dataset"].from_list(prompts)
-
-    tokenizer = deps["AutoTokenizer"].from_pretrained(config.base_model)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    model = deps["AutoModelForCausalLM"].from_pretrained(config.base_model)
-
-    def reward_fn(prompts, completions, **_kwargs):
-        # Table-backed reward: reuse the production feedback reward when the
-        # generated completion matches a recorded response; neutral otherwise.
-        return [float(reward_table.get(completion, 0.0)) for completion in completions]
-
-    training_args = deps["TRLGRPOConfig"](
-        output_dir=config.output_dir,
-        num_train_epochs=config.epochs,
-        learning_rate=config.learning_rate,
-        per_device_train_batch_size=config.per_device_batch_size,
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
-        num_generations=config.num_generations,
-        max_prompt_length=config.max_prompt_length,
-        max_completion_length=config.max_completion_length,
-        seed=config.seed,
-        logging_steps=10,
-        save_strategy="epoch",
-    )
-    trainer = deps["GRPOTrainer"](
-        model=model,
-        args=training_args,
-        train_dataset=dataset,
-        reward_funcs=reward_fn,
-        processing_class=tokenizer,
-    )
-    trainer.train()
-    trainer.save_model(config.output_dir)
-    tokenizer.save_pretrained(config.output_dir)
-    return {
-        "status": "completed",
-        "output_dir": config.output_dir,
-        "prompt_groups": len(prompts),
-        "config": config.to_dict(),
-    }
+    """Removed in stage 5: the old trainer rewarded a completion only when its text exactly matched
+    a recorded response (a lookup table), so no freshly sampled completion could ever be rewarded.
+    Use the programmatic reward (training/grpo_reward.py) and trainer (training/grpo_train.py)."""
+    raise RuntimeError("legacy lookup-table GRPO was removed; use "
+                       "python -m rateyourdj.training.grpo_train (see stage-5.md)")
 
 
 def _is_number(value: Any) -> bool:

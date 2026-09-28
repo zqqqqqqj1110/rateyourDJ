@@ -756,6 +756,7 @@ OpenAI chat / tool-call 格式（vLLM 与 Qwen 的聊天模板直接可用），
 }
 ```
 
+- 实际格式（阶段 5，`training/grpo_data.py`）：`prompt` 是执行完检索之后的对话（system、user、工具调用与真实的检索结果），另有 `tools`、`candidates`（每首的相关性、tail 分数、分档、证据、与最近种子的相似度、是否种子艺人）、`sim`（候选间 embedding 余弦相似度矩阵）、`constraints`（count、max_per_artist、min_tail、exploration_level、tail_band、exclude_artists、candidate_set_id）；`eval_only` 里是 `hidden_positives`（两跳共听，`hidden-pos-v1`）、`weak_positives`、`oracle_picks`、`oracle_arguments`；
 - prompt 里不含唯一标准答案；
 - **`eval_only` 严格不进 reward**：训练数据加载器必须在读入时删掉整个 `eval_only` 字段，由测试强制检查；它只用于验证集、测试集和 checkpoint 选择；
 - `hidden_positives` 来自 ListenBrainz / MSD 中与 `participant_001` 口味相近用户的真实收听日志；用户 ID 只存哈希。

@@ -1,6 +1,7 @@
 """rateyourdj-rank: stage 3 ranking evaluation.
 
   build-positives   ListenBrainz similar-recordings of the seeds -> eval/weak_positives_v1.json
+  build-hidden-positives  two-hop co-listens (stage 5, eval only) -> eval/hidden_positives_v1.json
   eval              rel-only vs tail mix (--with-agent adds the DeepSeek ReAct agent) -> runs/ranking-v1/
 """
 
@@ -26,6 +27,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--positives", default="eval/weak_positives_v1.json")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("build-positives")
+    hp = sub.add_parser("build-hidden-positives")
+    hp.add_argument("--out", default="eval/hidden_positives_v1.json")
+    hp.add_argument("--hop1-expand", type=int, default=40)
     ev = sub.add_parser("eval")
     ev.add_argument("--queries", default="eval/retrieval_queries_v1.jsonl")
     ev.add_argument("--run-dir", default="runs/ranking-v1")
@@ -43,6 +47,20 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.positives).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", "utf-8")
         for bid, b in out["branches"].items():
             print(f"{bid}: returned {b['returned']}, in catalog {b['in_catalog']}, buckets {b['buckets']}")
+        return 0
+
+    if args.command == "build-hidden-positives":
+        from rateyourdj.data_pipeline.sources import ListenBrainzClient
+
+        from .positives import build_two_hop_positives
+        out = build_two_hop_positives(context, songs, ListenBrainzClient(Path(args.catalog_root) / "raw"),
+                                      hop1_expand=args.hop1_expand)
+        Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n", "utf-8")
+        print(f"api calls: {out['api_calls']}")
+        for bid, b in out["branches"].items():
+            hop = {h: sum(1 for v in b["hop"].values() if v == h) for h in (1, 2)}
+            print(f"{bid}: in catalog {b['in_catalog']} (hop1 {hop[1]}, hop2 {hop[2]}), buckets {b['buckets']}")
+        print(f"wrote {args.out}")
         return 0
 
     from rateyourdj.agent.factory import build_recommender, vector_similarity
