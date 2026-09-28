@@ -527,31 +527,31 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 需要完成：数据与 Reward
 
-- [ ] GRPO 样本改为 `user_context + request + candidates + constraints + hidden positives`；
-- [ ] prompt 不包含唯一标准输出；
-- [ ] 围绕一个用户构造多种场景，不把场景数量描述成独立用户数；
-- [ ] 隐藏正样本来自 ListenBrainz/MSD 中与 `participant_001` 口味相近用户的真实收听日志（阶段 4 顺延至此）；
-- [ ] 隐藏正样本严格不进入 reward 计算，只用于验证集、测试集和 checkpoint 选择；
-- [ ] 用 ListenBrainz 中 tail 分桶歌曲构造长尾任务；
-- [ ] 第一版目标 2,000-3,000 个 prompt，每个 20-30 个候选；
-- [ ] GRPO 数据从头构建：现有 `data/grpo.jsonl` 仅 6 组旧 trajectory 反馈，大多 reward 为 0，废弃不用；
-- [ ] 删除当前 completion 文本完全匹配的查表 reward；
-- [ ] 解析任意新 completion 的结构化推荐；
-- [ ] 实现 relevance、tail relevance（基于 embedding 与曲库事实，不使用隐藏正样本）；
-- [ ] 实现 diversity、novelty 和 evidence correctness；
-- [ ] 实现候选外歌曲、重复、格式和约束惩罚；
-- [ ] 归一化、截断并版本化每个 reward 分量；
-- [ ] 添加防止堆满冷门歌、伪造分数和超长输出的对抗测试；
-- [ ] 用户开发反馈只用于检查 reward 排序是否符合人类判断。
+- [x] GRPO 样本改为 `user_context + request + candidates + constraints + hidden positives`；
+- [x] prompt 不包含唯一标准输出（oracle 只在 `eval_only`，训练视图里去掉）；
+- [x] 围绕一个用户构造多种场景，不把场景数量描述成独立用户数；
+- [x] ~~相近用户的真实收听日志~~ → 改为两跳共听（ListenBrainz Labs similar-recordings，`hidden-pos-v1`）：单用户没有“相近用户”可取，共听是真实会话行为的聚合；
+- [x] 隐藏正样本严格不进入 reward 计算，只用于验证集、测试集和 checkpoint 选择；
+- [ ] 用 ListenBrainz 中 tail 分桶歌曲构造长尾任务 → 未做：共听数据里没有 tail 歌曲（0 首）；长尾只通过 `tail_band` 约束和冷门曝光体现；
+- [ ] ~~第一版目标 2,000-3,000 个 prompt，每个 20-30 个候选~~ → 实际 800 / 100 / 200，每题 30–40 个候选（受 6–8h 预算限制）；
+- [x] GRPO 数据从头构建：现有 `data/grpo.jsonl` 仅 6 组旧 trajectory 反馈，大多 reward 为 0，废弃不用；
+- [x] 删除当前 completion 文本完全匹配的查表 reward；
+- [x] 解析任意新 completion 的结构化推荐；
+- [x] 实现 relevance、tail relevance（基于 embedding 与曲库事实，不使用隐藏正样本）；
+- [x] 实现 diversity、novelty 和 evidence correctness；
+- [x] 实现候选外歌曲、重复、格式和约束惩罚；
+- [x] 归一化、截断并版本化（`reward-v1`）每个 reward 分量；
+- [x] 添加防止堆满冷门歌、伪造分数和超长输出的对抗测试；
+- [ ] 用户开发反馈只用于检查 reward 排序是否符合人类判断 → 未做，顺延到阶段 6。
 
 ### 需要完成：训练与评估
 
-- [ ] 从阶段 4 的 SFT checkpoint 开始；
-- [ ] 先完成 100 prompt smoke run；
-- [ ] 监控 reward 分量、KL、非法率、输出长度和模式坍塌；
-- [ ] 保存最佳 checkpoint；
-- [ ] 比较 SFT、SFT + 固定混排、SFT + GRPO；
-- [ ] 分别报告相关性、长尾曝光、多样性和约束指标。
+- [x] 从阶段 4 的 SFT checkpoint 开始（合并为 `rateyourdj-sft-v1`）；
+- [x] 先完成 smoke run（两轮；第二轮加提交前缀预填）；
+- [x] 监控 reward 分量、KL、非法率、输出长度和模式坍塌；
+- [x] 保存最佳 checkpoint（val 上按 C 选出 ckpt-100）；
+- [x] 比较 SFT、SFT + 固定混排、SFT + GRPO（见 stage-5.md 第四节）；
+- [x] 分别报告相关性、长尾曝光、多样性和约束指标。
 
 ### 本阶段不动
 
@@ -563,10 +563,10 @@ participant_001 的种子歌曲 + 当前文本请求
 
 ### 完成标准
 
-- [ ] GRPO 在冻结测试集上优于 SFT + 固定混排的预设综合指标；
-- [ ] 相关性没有不可接受的下降；
-- [ ] 候选外推荐率仍为 0；
-- [ ] 如未超过固定策略，保留并如实报告结论。
+- [ ] GRPO 在冻结测试集上优于 SFT + 固定混排的预设综合指标 → **未达到**：C 0.4818 vs 0.5053，CI [−0.049, 0.000]；
+- [x] 相关性没有不可接受的下降（0.984 vs 0.975）；
+- [ ] 候选外推荐率仍为 0（合法率 99%，待在 `runs/grpo-eval-v1` 里确认 2 条不合法回答的原因）；
+- [x] 如未超过固定策略，保留并如实报告结论：阶段 6 默认用 SFT + 固定混排，GRPO 作为对照策略。
 
 ## 10. 阶段 6：系统集成与单用户研究
 

@@ -14,6 +14,7 @@ export OMP_NUM_THREADS=${OMP_NUM_THREADS:-8} PYTHONPATH=src
 export VLLM_USE_FLASHINFER_SAMPLER=0 VLLM_ATTENTION_BACKEND=FLASH_ATTN
 
 serve() {  # $1 = extra vLLM args
+  gpu_free
   nohup vllm serve "$SFT_MODEL" --served-model-name base --port 8000 --max-model-len 16384 \
     --gpu-memory-utilization 0.85 $1 > vllm.log 2>&1 &
   echo "vLLM starting (log: vllm.log) ..."
