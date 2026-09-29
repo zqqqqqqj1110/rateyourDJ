@@ -669,7 +669,9 @@ YouTube 链接由 LLM API 联网搜索得到，必须用 YouTube oEmbed 或 Data
 ```
 
 - `strategy_version` 例：`legacy-deepseek-v0`（旧路径，只在 baseline 里出现）、`rag-rel-v1`、`rag-tailmix-v1`、`sft-lora-v1`、`grpo-v1`；
-- `interleaving` 只在两两交错对比时出现：同一请求混排两个策略的结果，`arm` 标记这首歌来自哪个策略，反馈据此归因。
+- `interleaving` 只在两两交错对比时出现：同一请求混排两个策略的结果，`arm` 标记这首歌来自哪个策略，反馈据此归因。实际还带 `method`（`team-draft-v1`）；
+- `phase`（2026-09-29 起）：`dev` / `final`，与反馈的 `phase` 相同，由服务启动参数 `--phase` 决定；
+- 每次交错请求另在 `data/users/<user_id>/interleavings.jsonl` 写一条：`pair_id`、`arms`（A/B → 策略）、`run_ids`、`arm_lists`（两个策略各自的完整排序）、`shown`（实际展示顺序及每首的 arm）、`request`、`phase`、`created_at`。只有 `shown` 里的歌进入 `recommended_song_ids`。
 
 ## 9.6 FeedbackV2（反馈）
 
@@ -702,6 +704,9 @@ YouTube 链接由 LLM API 联网搜索得到，必须用 YouTube oEmbed 或 Data
 - `survey.heard_before`：`yes` / `no` / `unsure`；`relevance`、`discovery_value`：1–5；
 - `reject_reason`：`dislike_song`（不喜欢这首）/ `not_in_mood_to_explore`（当前不想探索）/ `other`，两者必须区分；
 - `phase`：`dev`（开发轮次，可以用来检查 reward 是否合理）或 `final`（最终 case study，**永远不进任何训练或调参**）。
+- 实现上每次交互写一条反馈（一个事件或几个问卷字段），同一个曝光可以有多条，分析时按 `impression_id` 合并、同一字段取最后一次；
+- 交错对比中的反馈会复制曝光的 `interleaving` 字段，方便直接归因；
+- 问卷只接受上面列出的字段：`relevance`、`discovery_value` 为 1–5 的整数，`too_unfamiliar`、`would_save` 为布尔值，其他字段拒绝。
 
 ## 9.7 SFT 样本
 

@@ -21,9 +21,28 @@ def vector_similarity(retriever: Retriever):
     return sim
 
 
+def playback_resolver_from_env(catalog_root: str | Path) -> Any | None:
+    """On-demand playback lookup for songs about to be shown (cached in playback_cache.json).
+
+    Spotify title+artist search for head/mid songs, YouTube (quota-limited) for tail
+    songs. The slow MusicBrainz ISRC lookup is skipped here to keep responses fast.
+    Returns None when neither Spotify nor YouTube credentials are configured.
+    """
+    import os
+
+    from rateyourdj.data_pipeline.playback import PlaybackResolver, YouTubeResolver, spotify_search_from_env
+
+    spotify = spotify_search_from_env()
+    youtube = YouTubeResolver(Path(catalog_root) / "raw") if os.getenv("YOUTUBE_API_KEY") else None
+    if spotify is None and youtube is None:
+        return None
+    return PlaybackResolver(Path(catalog_root) / "playback_cache.json", youtube=youtube, spotify_search=spotify)
+
+
 def build_recommender(*, catalog_root: str | Path = "data/catalog", users_root: str | Path = "data/users",
                       index_root: str | Path = "data/index", model: str | None = None,
-                      use_llm: bool = True, encoder: Any = None) -> RecommenderV2:
+                      use_llm: bool = True, encoder: Any = None, phase: str = "dev",
+                      playback_lookup: bool = True) -> RecommenderV2:
     import json
 
     from rateyourdj.rag.index import load_index
@@ -46,4 +65,5 @@ def build_recommender(*, catalog_root: str | Path = "data/catalog", users_root: 
     return RecommenderV2(catalog_root=catalog_root, users_root=users_root,
                          retriever_factory=retriever_factory,
                          llm=OpenAICompatibleChat.from_env() if use_llm else None,
-                         similarity_factory=vector_similarity)
+                         similarity_factory=vector_similarity, feedback_phase=phase,
+                         playback=playback_resolver_from_env(catalog_root) if playback_lookup else None)

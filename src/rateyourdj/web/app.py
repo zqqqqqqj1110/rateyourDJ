@@ -41,6 +41,8 @@ def create_app(
     agent_mode: str = "auto",
     recommender_v2: Any | None = None,
     auto_configure_v2: bool = False,
+    default_user: str = "participant_001",
+    study_phase: str = "dev",
 ) -> Flask:
     app = Flask(__name__)
     v2_state: dict[str, Any] = {"service": recommender_v2}
@@ -49,7 +51,7 @@ def create_app(
         # V2 users (data/users/<id>/context.json) use retrieval + ranking + ReAct agent.
         if v2_state["service"] is None and auto_configure_v2:
             from rateyourdj.agent.factory import build_recommender
-            v2_state["service"] = build_recommender()
+            v2_state["service"] = build_recommender(phase=study_phase)
         return v2_state["service"]
     profile_store = JsonProfileStore(profile_dir)
     song_store = JsonSongStore(song_dir)
@@ -88,7 +90,7 @@ def create_app(
 
     @app.get("/")
     def index() -> str:
-        return render_template("index.html")
+        return render_template("index.html", default_user=default_user)
 
     @app.get("/api/agent-status")
     def agent_status() -> Any:
@@ -182,8 +184,16 @@ def create_app(
                                                 and 0 <= float(exploration) <= 1):
                 raise ValueError("exploration_level must be a number within [0, 1]")
             strategy = _optional_string(payload, "strategy")
-            if strategy is not None and strategy not in {"rag-rel-v1", "rag-tailmix-v1"}:
-                raise ValueError("strategy must be rag-rel-v1 or rag-tailmix-v1")
+            available = v2.available_strategies()
+            if strategy is not None and strategy not in available:
+                raise ValueError(f"strategy must be one of: {', '.join(available)}")
+            interleave = payload.get("interleave")
+            if interleave is not None:
+                if (not isinstance(interleave, list) or len(interleave) != 2
+                        or len(set(interleave)) != 2 or any(a not in available for a in interleave)):
+                    raise ValueError(f"interleave must be two different strategies from: {', '.join(available)}")
+                if strategy is not None:
+                    raise ValueError("use either strategy or interleave, not both")
             result_v2 = v2.recommend(
                 user_id,
                 str(payload.get("message") or ""),
@@ -192,6 +202,7 @@ def create_app(
                 branch_hint=_optional_string(payload, "branch_hint"),
                 mode={"auto": "auto", "model": "agent", "rules": "pipeline"}[mode],
                 strategy=strategy,
+                interleave=interleave,
             )
             if not _optional_bool(payload, "include_trace", default=False):
                 result_v2["trace"] = None
@@ -277,6 +288,29 @@ def create_app(
                 "reward_score": record.reward_score,
             }
         ), 201
+
+    @app.get("/api/v2/status")
+    def v2_status() -> Any:
+        v2 = v2_service()
+        if v2 is None:
+            return jsonify({"enabled": False})
+        user_id = request.args.get("user_id")
+        return jsonify({"enabled": True, **v2.status(user_id.strip() if user_id else None)})
+
+    @app.get("/api/v2/users/<user_id>/saved")
+    def v2_saved(user_id: str) -> Any:
+        v2 = _require_v2_user(v2_service(), user_id)
+        songs = v2.saved_songs(user_id)
+        return jsonify({"user_id": user_id, "total": len(songs), "songs": songs})
+
+    @app.delete("/api/v2/users/<user_id>/data")
+    def v2_delete_data(user_id: str) -> Any:
+        v2 = _require_v2_user(v2_service(), user_id)
+        payload = request.get_json(silent=True) or {}
+        if payload.get("confirm") != user_id:
+            raise ValueError("confirm must equal the user_id to delete data")
+        scope = _optional_choice(payload, "scope", default="interactions", choices={"interactions", "all"})
+        return jsonify(v2.delete_user_data(user_id, scope))
 
     @app.get("/api/v1/agent/session/<session_id>")
     def v1_agent_session(session_id: str) -> Any:
@@ -400,6 +434,10 @@ def create_app(
             }
         )
 
+    @app.errorhandler(LookupError)
+    def handle_lookup_error(error: Exception) -> Any:
+        return jsonify({"error": str(error)}), 404
+
     @app.errorhandler(ValueError)
     @app.errorhandler(ProfileNotFoundError)
     @app.errorhandler(SongNotFoundError)
@@ -412,6 +450,12 @@ def create_app(
         return jsonify({"error": str(error)}), status
 
     return app
+
+
+def _require_v2_user(v2: Any, user_id: str) -> Any:
+    if v2 is None or not v2.has_user(user_id):
+        raise LookupError(f"unknown V2 user {user_id!r}")
+    return v2
 
 
 def _top_preferences(
@@ -825,6 +869,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--deepseek-base-url",
         default=os.getenv("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL),
     )
+    parser.add_argument("--default-user", default="participant_001")
+    parser.add_argument("--phase", choices=("dev", "final"), default=os.getenv("RYDJ_PHASE", "dev"),
+                        help="study phase stamped on every impression/feedback; final is never used for training")
     parser.add_argument("--debug", action="store_true")
     return parser
 
@@ -851,6 +898,8 @@ def main() -> None:
         llm_provider=llm_provider,
         agent_mode=args.agent_mode,
         auto_configure_v2=True,
+        default_user=args.default_user,
+        study_phase=args.phase,
     )
     app.run(
         host=args.host,

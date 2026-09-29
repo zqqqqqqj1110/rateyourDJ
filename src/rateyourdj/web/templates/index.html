@@ -6,6 +6,7 @@
     <title>rateyourDJ · 你的 AI 音乐 DJ</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
     <script src="https://open.spotify.com/embed/iframe-api/v1" async></script>
+    <script src="https://www.youtube.com/iframe_api" async></script>
   </head>
   <body>
     <div class="ambient ambient-one"></div>
@@ -22,12 +23,14 @@
       <div class="topbar-right">
         <label class="user-field">
           <span>用户</span>
-          <input id="user-id" value="demo-user" autocomplete="off" spellcheck="false" />
+          <input id="user-id" value="{{ default_user }}" autocomplete="off" spellcheck="false" />
         </label>
         <button id="new-chat" type="button" class="ghost-button">新对话</button>
         <button id="open-collection" type="button" class="ghost-button">
           收藏 <span id="collection-badge" class="badge">0</span>
         </button>
+        <button id="open-settings" type="button" class="ghost-button" aria-label="研究设置">⚙︎</button>
+        <span id="phase-pill" class="phase-pill hidden"></span>
         <span id="status-pill" class="status-pill"><span class="dot"></span> 连接中…</span>
       </div>
     </header>
@@ -36,21 +39,37 @@
       <div id="chat-stream" class="chat-stream">
         <div class="welcome" id="welcome">
           <h1>想听点什么？</h1>
-          <p>告诉我你的口味，我会推荐歌、附上试听，你点赞、收藏或跳过，我会越来越懂你。</p>
+          <p>说说你想听的，我会从熟悉的和没听过的歌里挑一批。每首歌下面可以告诉我听没听过、合不合口味——这些反馈是这次研究最重要的数据。</p>
           <div class="suggestion-row" id="suggestion-row">
-            <button type="button" class="suggestion" data-q="给我推荐一些最经典的英伦摇滚">最经典的英伦摇滚</button>
-            <button type="button" class="suggestion" data-q="想要适合深夜的慵懒爵士">深夜慵懒爵士</button>
-            <button type="button" class="suggestion" data-q="有没有像 Radiohead 那样的另类摇滚">像 Radiohead 的另类摇滚</button>
-            <button type="button" class="suggestion" data-q="推荐一些适合写代码时听的电子乐">写代码时听的电子乐</button>
+            <button type="button" class="suggestion" data-q="像 Wish You Were Here 那样的歌">像 Wish You Were Here 那样的歌</button>
+            <button type="button" class="suggestion" data-q="来点 Oasis 那种能跟着合唱的英伦摇滚">能跟着合唱的英伦摇滚</button>
+            <button type="button" class="suggestion" data-q="介于 Pink Floyd 和 Oasis 之间的歌">介于 Pink Floyd 和 Oasis 之间</button>
+            <button type="button" class="suggestion" data-q="想听点我大概没听过的迷幻摇滚">没听过的迷幻摇滚</button>
           </div>
         </div>
+      </div>
+
+      <div id="controls" class="controls hidden">
+        <label class="explore-control">
+          <span class="explore-end">熟悉</span>
+          <input id="exploration" type="range" min="0" max="1" step="0.1" value="0.5" aria-label="探索强度" />
+          <span class="explore-end">探索</span>
+          <span id="exploration-value" class="explore-value">0.5</span>
+        </label>
+        <label class="count-control">
+          <span>每次</span>
+          <select id="rec-count" aria-label="每次推荐数量">
+            <option value="5">5 首</option>
+            <option value="10" selected>10 首</option>
+          </select>
+        </label>
       </div>
 
       <form id="composer" class="composer" autocomplete="off">
         <input
           id="composer-input"
           type="text"
-          placeholder="比如：给我推荐一些最经典的英伦摇滚"
+          placeholder="比如：像 Wish You Were Here 那样的歌"
           aria-label="输入你想听的内容"
         />
         <button id="composer-send" type="submit" class="primary-button" aria-label="发送">
@@ -73,10 +92,47 @@
       <div class="drawer-stats">
         <div><strong id="stat-collection">0</strong><span>收藏</span></div>
         <div><strong id="stat-feedback">0</strong><span>反馈</span></div>
-        <div><strong id="stat-reward">0.00</strong><span>平均评分</span></div>
+        <div><strong id="stat-reward">0</strong><span id="stat-third-label">平均评分</span></div>
       </div>
       <div id="collection-list" class="collection-list">
-        <p class="drawer-empty">还没有收藏。点歌曲卡片上的 ♥ 就会出现在这里。</p>
+        <p class="drawer-empty">还没有收藏。</p>
+      </div>
+    </aside>
+
+    <aside id="settings-drawer" class="drawer hidden" aria-hidden="true">
+      <div class="drawer-head">
+        <div>
+          <p class="drawer-eyebrow">STUDY</p>
+          <h2>研究设置</h2>
+        </div>
+        <button id="close-settings" type="button" class="icon-button" aria-label="关闭">✕</button>
+      </div>
+      <div class="settings-body">
+        <section class="settings-section">
+          <h3>当前轮次</h3>
+          <p id="settings-phase" class="settings-note">—</p>
+          <p class="settings-note">轮次由启动参数 <code>--phase dev|final</code> 决定。正式轮（final）的反馈永远不用于训练或调参。</p>
+        </section>
+        <section class="settings-section">
+          <h3>对比实验</h3>
+          <p class="settings-note">开启后，每次请求会把两个策略的推荐交错混排在一起；页面上不会显示哪首来自哪个策略，反馈按来源自动归因。</p>
+          <label class="settings-row">
+            <span>策略 1</span>
+            <select id="arm-a"></select>
+          </label>
+          <label class="settings-row">
+            <span>策略 2</span>
+            <select id="arm-b"></select>
+          </label>
+          <p id="interleave-state" class="settings-note"></p>
+        </section>
+        <section class="settings-section">
+          <h3>我的数据</h3>
+          <p id="settings-counts" class="settings-note">—</p>
+          <button id="delete-interactions" type="button" class="danger-button">删除曝光与反馈记录（保留种子歌）</button>
+          <button id="delete-all" type="button" class="danger-button">删除全部数据（包括种子歌）</button>
+          <p id="delete-state" class="settings-note"></p>
+        </section>
       </div>
     </aside>
 
