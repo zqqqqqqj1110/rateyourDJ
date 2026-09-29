@@ -1,0 +1,109 @@
+{
+ "systems": {
+  "fixed_mix": {
+   "n": 200,
+   "valid": 1.0,
+   "reward": 0.813,
+   "hp_recall": 0.3127,
+   "hp_tail_recall": null,
+   "weak_recall": 0.4883,
+   "samples_with_hp": 196,
+   "samples_with_tail_hp": 0,
+   "tail_exposure": 0.433,
+   "mean_relevance": 0.9753,
+   "ild": 0.1934,
+   "seed_artist_share": 0.0318,
+   "components": {
+    "relevance": 0.8283,
+    "tail_relevance": 0.522,
+    "tail_band": 0.9617,
+    "diversity": 0.7297,
+    "novelty": 0.5613,
+    "evidence": 0.9939
+   },
+   "distinct_songs": 484,
+   "composite": 0.5053,
+   "by_mode": {
+    "both": {
+     "n": 36,
+     "valid": 1.0,
+     "hp_recall": 0.3232,
+     "tail_exposure": 0.463
+    },
+    "fixed": {
+     "n": 13,
+     "valid": 1.0,
+     "hp_recall": 0.3495,
+     "tail_exposure": 0.4538
+    },
+    "none": {
+     "n": 31,
+     "valid": 1.0,
+     "hp_recall": 0.2869,
+     "tail_exposure": 0.3882
+    },
+    "single": {
+     "n": 120,
+     "valid": 1.0,
+     "hp_recall": 0.3122,
+     "tail_exposure": 0.4333
+    }
+   }
+  },
+  "sft": {
+   "n": 200,
+   "valid": 1.0,
+   "reward": 0.8105,
+   "hp_recall": 0.2876,
+   "hp_tail_recall": null,
+   "weak_recall": 0.5202,
+   "samples_with_hp": 196,
+   "samples_with_tail_hp": 0,
+   "tail_exposure": 0.4187,
+   "mean_relevance": 0.9776,
+   "ild": 0.1875,
+   "seed_artist_share": 0.015,
+   "components": {
+    "relevance": 0.8493,
+    "tail_relevance": 0.513,
+    "tail_band": 0.9878,
+    "diversity": 0.6944,
+    "novelty": 0.5697,
+    "evidence": 0.9476
+   },
+   "distinct_songs": 453,
+   "composite": 0.4822,
+   "composite_minus_fixed_mix_ci95": [
+    -0.0459,
+    -0.0006
+   ],
+   "by_mode": {
+    "both": {
+     "n": 36,
+     "valid": 1.0,
+     "hp_recall": 0.2838,
+     "tail_exposure": 0.4185
+    },
+    "fixed": {
+     "n": 13,
+     "valid": 1.0,
+     "hp_recall": 0.2731,
+     "tail_exposure": 0.4308
+    },
+    "none": {
+     "n": 31,
+     "valid": 1.0,
+     "hp_recall": 0.2424,
+     "tail_exposure": 0.3914
+    },
+    "single": {
+     "n": 120,
+     "valid": 1.0,
+     "hp_recall": 0.3025,
+     "tail_exposure": 0.4244
+    }
+   }
+  }
+ },
+ "reference_tail_exposure": 0.433
+}

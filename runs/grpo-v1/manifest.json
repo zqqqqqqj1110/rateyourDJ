@@ -1,0 +1,53 @@
+{
+  "config": {
+    "beta": 0.02,
+    "data_dir": "data/training/grpo/grpo-v1",
+    "epochs": 1.0,
+    "grad_accum": 4,
+    "learning_rate": 2e-05,
+    "limit_train": 330,
+    "lora_alpha": 32,
+    "lora_r": 16,
+    "max_completion_length": 1400,
+    "max_prompt_length": 12288,
+    "num_generations": 8,
+    "output_dir": "runs/grpo-v1",
+    "per_device_batch": 2,
+    "prefill": true,
+    "save_steps": 50,
+    "seed": 20260928,
+    "sft_model": "/root/autodl-tmp/models/rateyourdj-sft-v1",
+    "temperature": 1.0,
+    "use_vllm": true,
+    "vllm_gpu_memory_utilization": 0.35
+  },
+  "created_at": "2026-09-28T15:16:15+00:00",
+  "data": {
+    "data/training/grpo/grpo-v1/manifest.json": "97b5c00324c5b97b207c22d074b4ab992fd8688d0580eff95ed1dd821779b2ad",
+    "data/training/grpo/grpo-v1/train.jsonl": "f6756de168795adbc4b8742653db5e919ed0f4e98eae2a3e659d0bc1aa312e6c"
+  },
+  "environment": {
+    "platform": "Linux-5.15.0-25-generic-x86_64-with-glibc2.35",
+    "python": "3.12.3"
+  },
+  "git": {
+    "commit": null,
+    "dirty": null
+  },
+  "kind": "grpo",
+  "metrics": {
+    "minutes": 366.0,
+    "peak_gpu_gb": 32.8,
+    "reward_version": "reward-v1",
+    "steps": 330,
+    "train_prompts": 330
+  },
+  "model": {
+    "adapter": "runs/grpo-v1/adapter",
+    "start": "/root/autodl-tmp/models/rateyourdj-sft-v1"
+  },
+  "notes": "",
+  "run_id": "grpo-v1",
+  "schema_version": "run-manifest/v1",
+  "seed": 20260928
+}

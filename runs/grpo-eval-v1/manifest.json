@@ -1,0 +1,45 @@
+{
+  "config": {
+    "base_url": "http://localhost:8000/v1",
+    "data": "data/training/grpo/grpo-v1/test.jsonl",
+    "limit": null,
+    "models": "sft=base,grpo=grpo",
+    "out": "runs/grpo-eval-v1",
+    "tokenizer": "/root/autodl-tmp/models/rateyourdj-sft-v1"
+  },
+  "created_at": "2026-09-28T16:11:30+00:00",
+  "data": {
+    "data/training/grpo/grpo-v1/test.jsonl": "615a7f0d07a5a6df111561af636d3b3f6b2c391de1cb1c7f252cf36c5692cbe8"
+  },
+  "environment": {
+    "platform": "Linux-5.15.0-25-generic-x86_64-with-glibc2.35",
+    "python": "3.12.3"
+  },
+  "git": {
+    "commit": null,
+    "dirty": null
+  },
+  "kind": "grpo_eval",
+  "metrics": {
+    "fixed_mix": {
+      "composite": 0.5053,
+      "hp_recall": 0.3127,
+      "valid": 1.0
+    },
+    "grpo": {
+      "composite": 0.4818,
+      "hp_recall": 0.2879,
+      "valid": 0.99
+    },
+    "sft": {
+      "composite": 0.4791,
+      "hp_recall": 0.2841,
+      "valid": 1.0
+    }
+  },
+  "model": {},
+  "notes": "",
+  "run_id": "grpo-eval-v1",
+  "schema_version": "run-manifest/v1",
+  "seed": null
+}
