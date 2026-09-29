@@ -346,7 +346,9 @@ V2 用户（`data/users/<user_id>/context.json`，默认 `participant_001`）使
 |---|---|
 | `POST /api/v1/agent/recommend` | V2 用户可传 `exploration_level`（0–1）、`branch_hint`、`strategy`（服务端 `strategies` 之一）或 `interleave`（两个不同策略，二者不能同时传）。交错时响应的 `interleaving` 为 `{pair_id, method}`，每首歌不带策略名 |
 | `POST /api/v1/agent/feedback` | V2：`{user_id, impression_id, event?, seconds?, fraction?, survey?}`；未知曝光返回 404，问卷字段校验失败返回 400 |
-| `GET /api/v2/status?user_id=` | `phase`、`strategies`、`agent_model`、`playback_lookup`、`known_user`、`exploration_level`、`branches`、`counts` |
+| `POST /api/v2/chat` | 对话层（ReAct）：`{user_id, message, session_id?, count?, exploration_level?, interleave?, include_trace?}`。返回推荐结果（`recommendations` 可能为空）、`message`、`session_id`、`action`（`recommend` / `answer`） |
+| `GET /api/v2/users/<user_id>/sessions/<session_id>` | 恢复会话：每轮的用户消息、回复、动作和卡片 |
+| `GET /api/v2/status?user_id=` | `phase`、`strategies`、`agent_model`、`conversation_model`、`playback_lookup`、`known_user`、`exploration_level`、`branches`、`counts` |
 | `GET /api/v2/users/<user_id>/saved` | 有 `saved` 事件的歌，新的在前 |
 | `DELETE /api/v2/users/<user_id>/data` | 请求体 `{"scope": "interactions" \| "all", "confirm": "<user_id>"}`；`confirm` 不等于 user_id 时返回 400 |
 

@@ -21,6 +21,22 @@ def vector_similarity(retriever: Retriever):
     return sim
 
 
+def conversation_llm_from_env() -> OpenAICompatibleChat | None:
+    """LLM for the conversation layer: CONVERSE_LLM_* if set, else DeepSeek; None without a key.
+
+    Kept separate from AGENT_LLM_* so the selection step can point at the fine-tuned
+    model while the conversation layer stays on a general model.
+    """
+    import os
+
+    key = os.getenv("CONVERSE_LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    if not key:
+        return None
+    return OpenAICompatibleChat(key, model=os.getenv("CONVERSE_LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat",
+                                base_url=os.getenv("CONVERSE_LLM_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL")
+                                or "https://api.deepseek.com", temperature=0.3)
+
+
 def playback_resolver_from_env(catalog_root: str | Path) -> Any | None:
     """On-demand playback lookup for songs about to be shown (cached in playback_cache.json).
 

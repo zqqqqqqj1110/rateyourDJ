@@ -2,6 +2,8 @@
 // 对话: POST /api/v1/agent/recommend
 //
 // V2 用户（data/users/<id>/context.json，默认 participant_001）走研究流程：
+//   对话: POST /api/v2/chat（ReAct 对话层：决定这一轮要推荐新歌、回答追问还是直接回复）
+//   恢复会话: GET /api/v2/users/<id>/sessions/<session_id>
 //   状态: GET /api/v2/status?user_id=
 //   反馈: POST /api/v1/agent/feedback { impression_id, event | survey }（没有曝光就没有反馈）
 //   收藏: GET /api/v2/users/<id>/saved；删除数据: DELETE /api/v2/users/<id>/data
@@ -28,7 +30,9 @@ const $ = (sel) => document.querySelector(sel);
 
 // 跨刷新持久化：记住 user_id 和当前会话，刷新/重开页面不丢上下文
 const STORE_KEYS = {
-  user: "rydj.userId",
+  // v2 后缀：不再沿用旧版本记住的用户（例如 demo-user），默认回到服务端指定的参与者
+  user: "rydj.userId.v2",
+  v2Session: "rydj.v2Session.",
   session: "rydj.sessionId",
   exploration: "rydj.exploration",
   count: "rydj.count",
@@ -114,7 +118,8 @@ function init() {
   lsSet(STORE_KEYS.user, state.userId);
   loadStatus().then(() => {
     refreshCollection();
-    if (state.sessionId && !state.v2) restoreConversation();
+    if (state.v2) restoreStudyConversation();
+    else if (state.sessionId) restoreConversation();
   });
 }
 
@@ -140,6 +145,7 @@ async function restoreConversation() {
 
 function startNewConversation() {
   state.sessionId = null;
+  lsSet(STORE_KEYS.v2Session + state.userId, null);
   state.lastRunId = null;
   state.trackState = {};
   state.trackCache = {};
@@ -165,9 +171,10 @@ async function loadStatus() {
   }
   applyMode();
   if (state.v2) {
-    const agent = state.v2.agent_model ? "agent" : "规则排序";
+    const talk = state.v2.conversation_model ? state.v2.conversation_model.split(":").pop() : "无对话模型";
+    const pick = state.v2.agent_model ? "agent 选歌" : "规则选歌";
     const play = state.v2.playback_lookup ? " · 自动找播放源" : "";
-    setStatus(`${agent}${play}`, true);
+    setStatus(`${talk} · ${pick}${play}`, true);
     return;
   }
   try {
@@ -200,7 +207,8 @@ async function sendMessage(text) {
       ? {
           user_id: state.userId,
           message: text,
-          constraints: { limit: state.count },
+          session_id: lsGet(STORE_KEYS.v2Session + state.userId) || undefined,
+          count: state.count,
           exploration_level: state.exploration,
           interleave: state.interleave || undefined,
         }
@@ -211,7 +219,7 @@ async function sendMessage(text) {
           constraints: { limit: 3 },
           include_trace: true,
         };
-    const result = await getJSON("/api/v1/agent/recommend", {
+    const result = await getJSON(state.v2 ? "/api/v2/chat" : "/api/v1/agent/recommend", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -221,6 +229,7 @@ async function sendMessage(text) {
       state.sessionId = result.session_id;
       lsSet(STORE_KEYS.session, state.sessionId);
     } else {
+      lsSet(STORE_KEYS.v2Session + state.userId, result.session_id);
       state.v2.counts = state.v2.counts || { impressions: 0, feedback: 0 };
       state.v2.counts.impressions += (result.recommendations || []).length;
     }
@@ -306,9 +315,9 @@ function appendDJReply(result, query) {
     const actions = el("div", "reply-actions");
     const more = el("button", "chip-button", "换一批");
     more.type = "button";
-    // V2：已推荐过的歌会被自动排除，所以直接用同一个请求再要一批
+    // V2：对话层知道上一轮的需求，已推荐过的歌会被自动排除
     more.addEventListener("click", () =>
-      sendMessage(state.v2 ? query : "换一批，不要重复刚才推荐过的歌")
+      sendMessage(state.v2 ? "换一批" : "换一批，不要重复刚才推荐过的歌")
     );
     actions.appendChild(more);
     bubble.appendChild(actions);
@@ -1165,5 +1174,24 @@ function mountYouTube(container, videoId, rec) {
         mount();
       }
     }, 300);
+  }
+}
+
+// 刷新页面后恢复 V2 会话：重建用户消息、DJ 回复和歌曲卡片（卡片仍可继续反馈）
+async function restoreStudyConversation() {
+  const sessionId = lsGet(STORE_KEYS.v2Session + state.userId);
+  if (!sessionId) return;
+  try {
+    const session = await getJSON(
+      `/api/v2/users/${encodeURIComponent(state.userId)}/sessions/${encodeURIComponent(sessionId)}`
+    );
+    if (!session.turns.length) return;
+    dismissWelcome();
+    session.turns.forEach((t) => {
+      appendUserBubble(t.user);
+      appendDJReply({ message: t.reply, recommendations: t.recommendations }, t.user);
+    });
+  } catch (error) {
+    lsSet(STORE_KEYS.v2Session + state.userId, null);
   }
 }

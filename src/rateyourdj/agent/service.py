@@ -7,6 +7,7 @@ Storage (all under data/users/<user_id>/, append-only where it matters):
   feedback.jsonl      FeedbackV2
   interleavings.jsonl one record per interleaved request (arms, per-arm runs, shown order)
   runs/<run_id>.json  full run: request, steps (tool, summary, status), validation
+  sessions/<id>.json  conversation turns (see converse.py)
 Candidate sets are saved under data/candidates/ so every run can be recomputed.
 
 Every impression, run and feedback record carries the study ``phase`` ("dev" or
@@ -391,8 +392,8 @@ class RecommenderV2:
     def delete_user_data(self, user_id: str, scope: str = "interactions") -> dict[str, Any]:
         """Delete a participant's data.
 
-        ``interactions``: impressions, feedback, interleavings, runs and the candidate
-        sets those runs used; context lists derived from them are reset (seeds kept).
+        ``interactions``: impressions, feedback, interleavings, runs, conversation sessions
+        and the candidate sets those runs used; context lists derived from them are reset (seeds kept).
         ``all``: the whole user directory, including context and seeds.
         """
         if scope not in DELETE_SCOPES:
@@ -426,6 +427,10 @@ class RecommenderV2:
         if runs_dir.is_dir():
             removed["runs"] = len(list(runs_dir.glob("*.json")))
             shutil.rmtree(runs_dir)
+        sessions_dir = d / "sessions"
+        if sessions_dir.is_dir():
+            removed["sessions"] = len(list(sessions_dir.glob("*.json")))
+            shutil.rmtree(sessions_dir)
         context = load_user_context(user_id, self.users_root, legacy_root=None)
         context["heard_song_ids"] = []
         context["recommended_song_ids"] = []

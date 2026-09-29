@@ -43,9 +43,24 @@ def create_app(
     auto_configure_v2: bool = False,
     default_user: str = "participant_001",
     study_phase: str = "dev",
+    conversation_agent: Any | None = None,
 ) -> Flask:
     app = Flask(__name__)
-    v2_state: dict[str, Any] = {"service": recommender_v2}
+    v2_state: dict[str, Any] = {"service": recommender_v2, "conversation": conversation_agent}
+
+    def conversation() -> Any | None:
+        # ReAct conversation layer: decides whether a message needs new songs or an answer.
+        if v2_state["conversation"] is None:
+            v2 = v2_service()
+            if v2 is None:
+                return None
+            from rateyourdj.agent.converse import ConversationAgent
+            llm = None
+            if auto_configure_v2:
+                from rateyourdj.agent.factory import conversation_llm_from_env
+                llm = conversation_llm_from_env()
+            v2_state["conversation"] = ConversationAgent(v2, llm)
+        return v2_state["conversation"]
 
     def v2_service() -> Any | None:
         # V2 users (data/users/<id>/context.json) use retrieval + ranking + ReAct agent.
@@ -187,13 +202,9 @@ def create_app(
             available = v2.available_strategies()
             if strategy is not None and strategy not in available:
                 raise ValueError(f"strategy must be one of: {', '.join(available)}")
-            interleave = payload.get("interleave")
-            if interleave is not None:
-                if (not isinstance(interleave, list) or len(interleave) != 2
-                        or len(set(interleave)) != 2 or any(a not in available for a in interleave)):
-                    raise ValueError(f"interleave must be two different strategies from: {', '.join(available)}")
-                if strategy is not None:
-                    raise ValueError("use either strategy or interleave, not both")
+            interleave = _interleave_arg(payload, available)
+            if interleave is not None and strategy is not None:
+                raise ValueError("use either strategy or interleave, not both")
             result_v2 = v2.recommend(
                 user_id,
                 str(payload.get("message") or ""),
@@ -295,7 +306,41 @@ def create_app(
         if v2 is None:
             return jsonify({"enabled": False})
         user_id = request.args.get("user_id")
-        return jsonify({"enabled": True, **v2.status(user_id.strip() if user_id else None)})
+        conv = conversation()
+        return jsonify({"enabled": True, **v2.status(user_id.strip() if user_id else None),
+                        "conversation_model": getattr(conv.llm, "name", None) if conv and conv.llm else None})
+
+    @app.post("/api/v2/chat")
+    def v2_chat() -> Any:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        user_id = _required_string(payload, "user_id")
+        v2 = _require_v2_user(v2_service(), user_id)
+        exploration = payload.get("exploration_level")
+        if exploration is not None and (isinstance(exploration, bool) or not isinstance(exploration, (int, float))
+                                        or not 0 <= float(exploration) <= 1):
+            raise ValueError("exploration_level must be a number within [0, 1]")
+        result = conversation().chat(
+            user_id, _required_string(payload, "message"),
+            session_id=_optional_string(payload, "session_id"),
+            count=_optional_int(payload, "count", default=10, minimum=1, maximum=20),
+            exploration_level=None if exploration is None else float(exploration),
+            interleave=_interleave_arg(payload, v2.available_strategies()),
+        )
+        if not _optional_bool(payload, "include_trace", default=False):
+            result["conversation"] = {k: v for k, v in result["conversation"].items() if k != "steps"}
+            result.pop("trace", None)
+        return jsonify(result), 201
+
+    @app.get("/api/v2/users/<user_id>/sessions/<session_id>")
+    def v2_session(user_id: str, session_id: str) -> Any:
+        _require_v2_user(v2_service(), user_id)
+        session = conversation().load_session(user_id, session_id)
+        return jsonify({"session_id": session["session_id"], "user_id": user_id,
+                        "turns": [{"user": t["user"], "reply": t["reply"], "action": t["action"],
+                                   "recommendations": t.get("recommendations", [])}
+                                  for t in session["turns"]]})
 
     @app.get("/api/v2/users/<user_id>/saved")
     def v2_saved(user_id: str) -> Any:
@@ -450,6 +495,16 @@ def create_app(
         return jsonify({"error": str(error)}), status
 
     return app
+
+
+def _interleave_arg(payload: dict[str, Any], available: list[str]) -> list[str] | None:
+    interleave = payload.get("interleave")
+    if interleave is None:
+        return None
+    if (not isinstance(interleave, list) or len(interleave) != 2
+            or len(set(interleave)) != 2 or any(a not in available for a in interleave)):
+        raise ValueError(f"interleave must be two different strategies from: {', '.join(available)}")
+    return interleave
 
 
 def _require_v2_user(v2: Any, user_id: str) -> Any:
